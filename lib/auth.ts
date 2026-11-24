@@ -1,51 +1,28 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { getDb } from "./db";
+import { hashToken, readSession, SESSION_COOKIE } from "./session";
 import type { Role, Session } from "./types";
 
-export const SESSION_COOKIE = "bcso_session";
+export { cookieOptions, readSession, SESSION_COOKIE } from "./session";
+
 const SESSION_MS = 12 * 60 * 60 * 1000;
-
-type SessionRow = {
-  id: string;
-  badge: string;
-  role: string;
-  expires_at: string;
-};
-
-function hashToken(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-export function cookieOptions(maxAge = SESSION_MS / 1000) {
-  return {
-    httpOnly: true,
-    sameSite: "lax" as const,
-    secure: process.env.BCSO_COOKIE_SECURE === "true",
-    path: "/",
-    maxAge,
-  };
-}
 
 export async function getSession(): Promise<Session | null> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
-  const row = getDb()
-    .prepare("SELECT id, badge, role, expires_at FROM sessions WHERE token_hash = ?")
-    .get(hashToken(token)) as SessionRow | undefined;
-  if (!row || row.expires_at <= new Date().toISOString()) {
-    if (row) getDb().prepare("DELETE FROM sessions WHERE id = ?").run(row.id);
+  const session = readSession(token);
+  if (token && !session) {
     try {
+      // Route handlers can persist this. Server Components cannot, so middleware
+      // also expires the cookie on the response when the token does not resolve.
       jar.delete(SESSION_COOKIE);
     } catch {
-      /* Cookie store is read-only in some render paths. */
+      /* Cookie store is read-only during Server Component render. */
     }
-    return null;
   }
-  if (row.role !== "patrol" && row.role !== "detective" && row.role !== "admin") return null;
-  return { badge: row.badge, role: row.role };
+  return session;
 }
 
 export function authenticate(badge: string, password: string): Session & { token: string } {

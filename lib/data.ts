@@ -339,7 +339,7 @@ export function createCase(input: {
   responders?: ResponderInput[];
   badge: string;
 }) {
-  return transaction((database) => {
+  const created = transaction((database) => {
     const id = randomUUID();
     const stamp = nowIso();
     const caseNumber = nextCaseNumber(database);
@@ -383,6 +383,7 @@ export function createCase(input: {
       );
     return getCaseDetailFrom(database, id);
   });
+  return finish(created.id, created);
 }
 
 function getCaseDetailFrom(database: DatabaseSync, id: string): CaseDetail {

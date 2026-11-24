@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Clock, MapPin, Plus, Search } from "lucide-react";
 import { NewCaseDialog } from "@/components/board/new-case-dialog";
+import { LiveDot } from "@/components/live/live-dot";
+import { useLiveStream } from "@/components/live/use-live-stream";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,32 +30,57 @@ export function CaseBoard() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const refreshTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(query.trim()), 220);
     return () => clearTimeout(timer);
   }, [query]);
 
-  useEffect(() => {
-    const controller = new AbortController();
+  const loadBoard = useCallback((signal?: AbortSignal, mode: "initial" | "live" = "initial") => {
     const params = new URLSearchParams({ status });
     if (debounced) params.set("q", debounced);
     if (type !== "all") params.set("type", type);
-    setLoading(true);
-    api<BoardResponse>(`/api/cases?${params.toString()}`, { signal: controller.signal })
+    if (mode === "initial") setLoading(true);
+    return api<BoardResponse>(`/api/cases?${params.toString()}`, { signal })
       .then((next) => {
         setData(next);
         setError("");
       })
       .catch((caught) => {
-        if (controller.signal.aborted) return;
+        if (signal?.aborted) return;
+        if (mode === "live") return;
         setError(caught instanceof ApiError ? caught.message : "The case board could not be loaded.");
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!signal?.aborted) setLoading(false);
       });
-    return () => controller.abort();
   }, [status, debounced, type]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadBoard(controller.signal, "initial");
+    return () => controller.abort();
+  }, [loadBoard]);
+
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimer.current) return;
+    refreshTimer.current = window.setTimeout(() => {
+      refreshTimer.current = null;
+      void loadBoard(undefined, "live");
+    }, 160);
+  }, [loadBoard]);
+
+  const liveStatus = useLiveStream("/api/events", (event) => {
+    if (event.kind === "positions") return;
+    scheduleRefresh();
+  });
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimer.current) window.clearTimeout(refreshTimer.current);
+    };
+  }, []);
 
   const types = useMemo(() => {
     const values = new Set([...(data?.incidentTypes ?? [])]);
@@ -68,7 +95,10 @@ export function CaseBoard() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-[11px] uppercase tracking-[0.2em] text-gold">Records division</p>
-            <h1 className="mt-1 font-display text-4xl tracking-wide">Case board</h1>
+            <div className="mt-1 flex items-center gap-3">
+              <h1 className="font-display text-4xl tracking-wide">Case board</h1>
+              <LiveDot status={liveStatus} />
+            </div>
             <p className="mt-1 max-w-xl text-sm text-fog">
               Open investigations and cleared files for Blaine County. Times are shown in Pacific time.
             </p>
