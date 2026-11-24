@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import bcrypt from "bcryptjs";
 import { dataDir, uploadDir } from "./paths";
-import { backfillEventLinks, seedPortal } from "./seed";
+import { backfillCaseClosures, backfillEventLinks, seedPortal } from "./seed";
 
 const globalForDb = globalThis as unknown as { bcso?: DatabaseSync };
 
@@ -119,6 +119,25 @@ CREATE TABLE IF NOT EXISTS photos (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS case_closures (
+  case_id TEXT PRIMARY KEY REFERENCES cases(id) ON DELETE CASCADE,
+  anyone_charged INTEGER NOT NULL CHECK (anyone_charged IN (0, 1)),
+  notes TEXT NOT NULL DEFAULT '',
+  closed_at TEXT NOT NULL,
+  closed_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS case_charges (
+  id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  suspect_node_id TEXT,
+  name TEXT NOT NULL,
+  charges TEXT NOT NULL,
+  arrest_report TEXT NOT NULL,
+  sort_order INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_events_case ON events(case_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_event_links_case ON event_links(case_id, event_id);
@@ -127,6 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_case ON nodes(case_id);
 CREATE INDEX IF NOT EXISTS idx_edges_case ON edges(case_id);
 CREATE INDEX IF NOT EXISTS idx_photos_node ON photos(node_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_hash ON sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_case_charges_case ON case_charges(case_id, sort_order);
 `;
 
 function ensurePasswords(database: DatabaseSync) {
@@ -149,9 +169,37 @@ function ensureFindingsColumn(database: DatabaseSync) {
   }
 }
 
+function columnNames(database: DatabaseSync, table: string) {
+  const rows = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return new Set(rows.map((column) => column.name));
+}
+
+function ensureClosureColumns(database: DatabaseSync) {
+  const closure = columnNames(database, "case_closures");
+  if (closure.size > 0) {
+    if (!closure.has("notes")) database.exec("ALTER TABLE case_closures ADD COLUMN notes TEXT NOT NULL DEFAULT ''");
+    if (!closure.has("closed_at")) database.exec("ALTER TABLE case_closures ADD COLUMN closed_at TEXT NOT NULL DEFAULT ''");
+    if (!closure.has("closed_by")) database.exec("ALTER TABLE case_closures ADD COLUMN closed_by TEXT NOT NULL DEFAULT ''");
+    if (!closure.has("updated_at")) database.exec("ALTER TABLE case_closures ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''");
+    if (!closure.has("anyone_charged")) {
+      database.exec("ALTER TABLE case_closures ADD COLUMN anyone_charged INTEGER NOT NULL DEFAULT 0");
+    }
+  }
+  const charges = columnNames(database, "case_charges");
+  if (charges.size > 0) {
+    if (!charges.has("suspect_node_id")) database.exec("ALTER TABLE case_charges ADD COLUMN suspect_node_id TEXT");
+    if (!charges.has("sort_order")) database.exec("ALTER TABLE case_charges ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0");
+    if (!charges.has("arrest_report")) database.exec("ALTER TABLE case_charges ADD COLUMN arrest_report TEXT NOT NULL DEFAULT ''");
+    if (!charges.has("charges")) database.exec("ALTER TABLE case_charges ADD COLUMN charges TEXT NOT NULL DEFAULT ''");
+    if (!charges.has("name")) database.exec("ALTER TABLE case_charges ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+  }
+  database.exec("CREATE INDEX IF NOT EXISTS idx_case_charges_case ON case_charges(case_id, sort_order)");
+}
+
 function init(database: DatabaseSync) {
   database.exec(SCHEMA);
   ensureFindingsColumn(database);
+  ensureClosureColumns(database);
   database.exec("BEGIN IMMEDIATE");
   try {
     ensurePasswords(database);
@@ -163,6 +211,7 @@ function init(database: DatabaseSync) {
       database.prepare("INSERT INTO meta (id, seeded) VALUES (1, 1)").run();
     }
     backfillEventLinks(database);
+    backfillCaseClosures(database);
     database.exec("COMMIT");
   } catch (error) {
     try {

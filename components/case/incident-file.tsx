@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { CaseClosurePanel } from "@/components/case/case-closure-panel";
 import { useSession } from "@/components/session";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,11 +33,13 @@ export function IncidentFile({
   onRecord,
   selectedEventId,
   onSelectEvent,
+  onEditClosure,
 }: {
   record: CaseDetail;
   onRecord: (record: CaseDetail) => void;
   selectedEventId: string | null;
   onSelectEvent: (id: string) => void;
+  onEditClosure: () => void;
 }) {
   const { role, badge } = useSession();
   const locked = record.status === "closed";
@@ -192,7 +195,12 @@ export function IncidentFile({
   const knownType = INCIDENT_TYPES.includes(record.incidentType as (typeof INCIDENT_TYPES)[number]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 bg-[#0c1118] p-3 sm:p-4">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto bg-[#0c1118] p-3 sm:p-4">
+      {record.status === "closed" ? (
+        <div className="shrink-0">
+          <CaseClosurePanel record={record} onEdit={onEditClosure} />
+        </div>
+      ) : null}
       <section className="flex min-h-[200px] flex-1 flex-col rounded-lg border border-white/10 bg-ink/80">
         <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
           <div className="mb-3 flex items-center justify-between gap-3">

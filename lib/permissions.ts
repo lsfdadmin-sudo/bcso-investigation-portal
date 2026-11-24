@@ -61,5 +61,5 @@ export const ROLE_LABEL: Record<Role, string> = {
 export const ROLE_BRIEF: Record<Role, string> = {
   patrol: "View files, open cases, log events, and add evidence.",
   detective: "Edit narratives, work the investigation board, and manage suspects.",
-  admin: "Close or reopen files, delete records, and rotate role passwords.",
+  admin: "Close or reopen files with a Backdraft CAD disposition, delete records, and rotate role passwords.",
 };
