@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { EVIDENCE_CATEGORIES, LINK_LABELS, SUSPECT_STATUSES, evidenceCategoryLabel, suspectStatusLabel } from "@/lib/constants";
+import { EVIDENCE_CATEGORIES, LINK_LABELS, SUSPECT_STATUSES, evidenceCategoryLabel, suspectStatusClass, suspectStatusLabel } from "@/lib/constants";
 import { ApiError, api } from "@/lib/client";
 import { formatWhen } from "@/lib/format";
 import { can } from "@/lib/permissions";
@@ -191,7 +191,7 @@ export function Inspector({ caseId, node, nodes, edges, events, eventLinks, lock
       kind === "suspect"
         ? { name, alias: "", status: "person_of_interest", notes: "" }
         : kind === "evidence"
-          ? { tag: "", category: "other", description: name, custody: "", notes: "" }
+          ? { tag: "", category: "other", description: name, findings: "", custody: "", notes: "" }
           : { title: name, location: "", occurredAt: "", notes: "" };
     const label = linkLabel === "Custom" ? customLabel.trim() : linkLabel;
     try {
@@ -283,7 +283,10 @@ export function Inspector({ caseId, node, nodes, edges, events, eventLinks, lock
               <Input id="suspect-alias" value={suspect.alias} disabled={!editable} onChange={(event) => setSuspect({ ...suspect, alias: event.target.value })} />
             </div>
             <div className="space-y-2">
-              <Label>Status</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label>Status</Label>
+                <Badge className={suspectStatusClass(suspect.status)}>{suspectStatusLabel(suspect.status)}</Badge>
+              </div>
               <Select value={suspect.status} onValueChange={(status) => setSuspect({ ...suspect, status: status as SuspectPayload["status"] })} disabled={!editable}>
                 <SelectTrigger aria-label="Suspect status">
                   <SelectValue />
@@ -332,6 +335,10 @@ export function Inspector({ caseId, node, nodes, edges, events, eventLinks, lock
               <Textarea id="description" value={evidence.description} disabled={!editable} onChange={(event) => setEvidence({ ...evidence, description: event.target.value })} />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="evidence-findings">Findings</Label>
+              <Textarea id="evidence-findings" value={evidence.findings} disabled={!editable} onChange={(event) => setEvidence({ ...evidence, findings: event.target.value })} placeholder="What the item shows" />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="custody">Chain of custody</Label>
               <Textarea id="custody" value={evidence.custody} disabled={!editable} onChange={(event) => setEvidence({ ...evidence, custody: event.target.value })} />
             </div>
@@ -357,12 +364,6 @@ export function Inspector({ caseId, node, nodes, edges, events, eventLinks, lock
               <Textarea id="related-notes" value={related.notes} disabled={!editable} onChange={(event) => setRelated({ ...related, notes: event.target.value })} />
             </div>
           </div>
-        ) : null}
-
-        {editable ? (
-          <Button type="button" onClick={save} disabled={saving}>
-            {saving ? "Saving" : "Save node"}
-          </Button>
         ) : null}
 
         <section>
@@ -549,14 +550,26 @@ export function Inspector({ caseId, node, nodes, edges, events, eventLinks, lock
         ) : null}
 
         {node.kind === "suspect" ? (
-          <p className="text-xs text-fog">Status on file: {suspectStatusLabel(node.payload.status)}.</p>
+          <p className="flex flex-wrap items-center gap-2 text-xs text-fog">
+            Status on file
+            <Badge className={suspectStatusClass(node.payload.status)}>{suspectStatusLabel(node.payload.status)}</Badge>
+          </p>
         ) : null}
         {node.kind === "evidence" ? (
-          <p className="text-xs text-fog">Category: {evidenceCategoryLabel(node.payload.category)}.</p>
+          <div className="space-y-2 text-xs text-fog">
+            <p>Category: {evidenceCategoryLabel(node.payload.category)}.</p>
+            {node.payload.findings ? <p className="whitespace-pre-wrap leading-5 text-foreground/85">{node.payload.findings}</p> : null}
+          </div>
+        ) : null}
+
+        {editable ? (
+          <Button type="button" className="w-full" onClick={save} disabled={saving}>
+            {saving ? "Saving" : "Save node"}
+          </Button>
         ) : null}
 
         {canDelete ? (
-          <Button type="button" variant="destructive" onClick={() => setConfirmDelete(true)}>
+          <Button type="button" variant="destructive" className="w-full" onClick={() => setConfirmDelete(true)}>
             <Trash2 />
             Delete {node.kind}
           </Button>

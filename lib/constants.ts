@@ -42,7 +42,16 @@ export const SUSPECT_STATUSES: { value: SuspectStatus; label: string }[] = [
   { value: "in_custody", label: "In Custody" },
   { value: "witness", label: "Witness" },
   { value: "person_of_interest", label: "Person of Interest" },
+  { value: "victim", label: "Victim" },
 ];
+
+const SUSPECT_STATUS_CLASS: Record<SuspectStatus, string> = {
+  at_large: "border-status-crimson/30 bg-status-crimson/10 text-status-crimson",
+  in_custody: "border-status-emerald/30 bg-status-emerald/10 text-status-emerald",
+  witness: "border-signal-cyan/30 bg-signal-cyan/10 text-signal-cyan",
+  person_of_interest: "border-status-amber/30 bg-status-amber/10 text-status-amber",
+  victim: "border-status-steel/35 bg-status-steel/15 text-status-steel",
+};
 
 export const EVIDENCE_CATEGORIES: { value: EvidenceCategory; label: string }[] = [
   { value: "weapon", label: "Weapon" },
@@ -71,6 +80,10 @@ export const LINK_LABELS = [
 
 export function suspectStatusLabel(status: SuspectStatus) {
   return SUSPECT_STATUSES.find((item) => item.value === status)?.label ?? status;
+}
+
+export function suspectStatusClass(status: SuspectStatus) {
+  return SUSPECT_STATUS_CLASS[status] ?? "border-white/10 bg-white/5 text-fog";
 }
 
 export function evidenceCategoryLabel(category: EvidenceCategory) {

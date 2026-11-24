@@ -7,7 +7,7 @@ export type Session = {
 
 export type CaseStatus = "open" | "closed";
 
-export type SuspectStatus = "at_large" | "in_custody" | "witness" | "person_of_interest";
+export type SuspectStatus = "at_large" | "in_custody" | "witness" | "person_of_interest" | "victim";
 
 export type EvidenceCategory =
   | "weapon"
@@ -45,6 +45,7 @@ export type EvidencePayload = {
   tag: string;
   category: EvidenceCategory;
   description: string;
+  findings: string;
   custody: string;
   notes: string;
 };

@@ -19,8 +19,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/client";
-import { EVIDENCE_CATEGORIES, EVENT_TYPES, SUSPECT_STATUSES, evidenceCategoryLabel, suspectStatusLabel } from "@/lib/constants";
-import { formatWhen, toDatetimeLocal } from "@/lib/format";
+import { EVIDENCE_CATEGORIES, EVENT_TYPES, SUSPECT_STATUSES, evidenceCategoryLabel, suspectStatusClass, suspectStatusLabel } from "@/lib/constants";
+import { formatWhen, fromDatetimeLocal, toDatetimeLocal } from "@/lib/format";
 import { can } from "@/lib/permissions";
 import type {
   CaseDetail,
@@ -61,6 +61,7 @@ function statusVariant(status: SuspectStatus) {
   if (status === "at_large") return "suspect" as const;
   if (status === "in_custody") return "closed" as const;
   if (status === "person_of_interest") return "open" as const;
+  if (status === "victim") return "neutral" as const;
   return "evidence" as const;
 }
 
@@ -126,7 +127,7 @@ export function InvestigationBoard({
   const [existingSuspect, setExistingSuspect] = useState("");
   const [existingEvidence, setExistingEvidence] = useState("");
   const [suspectDraft, setSuspectDraft] = useState({ name: "", alias: "", status: "person_of_interest" as SuspectStatus });
-  const [evidenceDraft, setEvidenceDraft] = useState({ category: "other" as EvidenceCategory, description: "" });
+  const [evidenceDraft, setEvidenceDraft] = useState({ category: "other" as EvidenceCategory, description: "", findings: "" });
   const [eventDraft, setEventDraft] = useState<DraftEvent>({
     occurredAt: toDatetimeLocal(),
     badge,
@@ -268,7 +269,14 @@ export function InvestigationBoard({
         method: "POST",
         body: JSON.stringify({
           kind: "evidence",
-          payload: { tag: "", category: evidenceDraft.category, description: evidenceDraft.description.trim(), custody: "", notes: "" },
+          payload: {
+            tag: "",
+            category: evidenceDraft.category,
+            description: evidenceDraft.description.trim(),
+            findings: evidenceDraft.findings.trim(),
+            custody: "",
+            notes: "",
+          },
           eventId: selectedEventId,
         }),
       });
@@ -311,8 +319,8 @@ export function InvestigationBoard({
       toast.error("Complete the event before logging it.");
       return;
     }
-    const when = new Date(eventDraft.occurredAt);
-    if (Number.isNaN(when.getTime())) {
+    const when = fromDatetimeLocal(eventDraft.occurredAt);
+    if (Number.isNaN(new Date(when).getTime())) {
       toast.error("Enter a valid date and time.");
       return;
     }
@@ -321,7 +329,7 @@ export function InvestigationBoard({
       const created = await api<CaseEvent>(`/api/cases/${caseId}/events`, {
         method: "POST",
         body: JSON.stringify({
-          occurredAt: when.toISOString(),
+          occurredAt: when,
           badge: eventDraft.badge,
           unit: eventDraft.unit,
           title: eventDraft.title,
@@ -363,7 +371,7 @@ export function InvestigationBoard({
         size="sm"
         variant="secondary"
         onClick={() => {
-          setEvidenceDraft({ category: "other", description: "" });
+          setEvidenceDraft({ category: "other", description: "", findings: "" });
           setExistingEvidence("");
           setEvidenceOpen(true);
         }}
@@ -417,7 +425,7 @@ export function InvestigationBoard({
                           <span className="mt-0.5 block truncate text-xs text-fog">
                             {payload.alias ? `Alias ${payload.alias}` : "No alias on file"}
                           </span>
-                          <Badge variant={statusVariant(payload.status)} className="mt-1.5">
+                          <Badge variant={statusVariant(payload.status)} className={cn("mt-1.5", suspectStatusClass(payload.status))}>
                             {suspectStatusLabel(payload.status)}
                           </Badge>
                         </span>
@@ -552,7 +560,10 @@ export function InvestigationBoard({
                             <span className="px-1 text-center font-mono text-[9px] uppercase tracking-[0.12em] text-fog">No photo</span>
                           )}
                         </span>
-                        <span className="line-clamp-3 text-sm leading-5 text-foreground/90">{payload.description || "No description."}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="line-clamp-3 block text-sm leading-5 text-foreground/90">{payload.description || "No description."}</span>
+                          {payload.findings ? <span className="mt-1 line-clamp-2 block text-xs leading-4 text-fog">{payload.findings}</span> : null}
+                        </span>
                       </span>
                       {people.length ? (
                         <span className="mt-2 flex flex-wrap gap-1">
@@ -660,7 +671,11 @@ export function InvestigationBoard({
               </div>
               <div className="space-y-2">
                 <Label htmlFor="new-evidence-description">Description</Label>
-                <Textarea id="new-evidence-description" value={evidenceDraft.description} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, description: event.target.value })} />
+                <Textarea id="new-evidence-description" value={evidenceDraft.description} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, description: event.target.value })} placeholder="What was recovered" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-evidence-findings">Findings</Label>
+                <Textarea id="new-evidence-findings" value={evidenceDraft.findings} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, findings: event.target.value })} placeholder="What the item shows" />
               </div>
               <p className="text-xs text-fog">The evidence tag is assigned when the item is booked, and it is linked to the selected event.</p>
             </div>
@@ -700,7 +715,7 @@ export function InvestigationBoard({
           <div className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="new-event-time">Date and time</Label>
+                <Label htmlFor="new-event-time">Date and time (EST)</Label>
                 <Input id="new-event-time" type="datetime-local" value={eventDraft.occurredAt} onChange={(event) => setEventDraft({ ...eventDraft, occurredAt: event.target.value })} />
               </div>
               <div className="space-y-2">
@@ -728,8 +743,8 @@ export function InvestigationBoard({
               <Input id="new-event-title" value={eventDraft.title} onChange={(event) => setEventDraft({ ...eventDraft, title: event.target.value })} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="new-event-findings">Findings</Label>
-              <Textarea id="new-event-findings" value={eventDraft.findings} onChange={(event) => setEventDraft({ ...eventDraft, findings: event.target.value })} />
+              <Label htmlFor="new-event-description">Description</Label>
+              <Textarea id="new-event-description" aria-label="Description" placeholder="What happened" value={eventDraft.findings} onChange={(event) => setEventDraft({ ...eventDraft, findings: event.target.value })} />
             </div>
           </div>
           <DialogFooter>

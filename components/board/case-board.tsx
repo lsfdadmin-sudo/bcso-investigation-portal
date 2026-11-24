@@ -100,7 +100,7 @@ export function CaseBoard() {
               <LiveDot status={liveStatus} />
             </div>
             <p className="mt-1 max-w-xl text-sm text-fog">
-              Open investigations and cleared files for Blaine County. Times are shown in Pacific time.
+              Open investigations and cleared files for Blaine County. Times are shown in Eastern Standard Time (EST).
             </p>
           </div>
           <Button onClick={() => setCreating(true)}>

@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   pos_x REAL NOT NULL,
   pos_y REAL NOT NULL,
   payload TEXT NOT NULL,
+  findings TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -141,8 +142,16 @@ function ensurePasswords(database: DatabaseSync) {
   }
 }
 
+function ensureFindingsColumn(database: DatabaseSync) {
+  const columns = database.prepare("PRAGMA table_info(nodes)").all() as { name: string }[];
+  if (!columns.some((column) => column.name === "findings")) {
+    database.exec("ALTER TABLE nodes ADD COLUMN findings TEXT");
+  }
+}
+
 function init(database: DatabaseSync) {
   database.exec(SCHEMA);
+  ensureFindingsColumn(database);
   database.exec("BEGIN IMMEDIATE");
   try {
     ensurePasswords(database);

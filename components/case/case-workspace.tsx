@@ -166,7 +166,7 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
                 <span>
                   {record.location}
                   <span className="mx-2 text-white/20">·</span>
-                  <span className="font-mono text-xs">{formatWhen(record.occurredAt)} PT</span>
+                  <span className="font-mono text-xs">{formatWhen(record.occurredAt)}</span>
                 </span>
               </p>
             </div>

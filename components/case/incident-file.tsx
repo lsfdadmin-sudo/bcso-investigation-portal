@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { EVENT_TYPES, INCIDENT_TYPES, RESPONDER_ROLES } from "@/lib/constants";
 import { api, ApiError } from "@/lib/client";
-import { formatWhen, toDatetimeLocal } from "@/lib/format";
+import { formatWhen, fromDatetimeLocal, toDatetimeLocal } from "@/lib/format";
 import { can } from "@/lib/permissions";
 import type { CaseDetail, CaseEvent, Responder } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -102,7 +102,7 @@ export function IncidentFile({
         body: JSON.stringify({
           incidentType: type,
           location,
-          occurredAt: new Date(occurredAt).toISOString(),
+          occurredAt: fromDatetimeLocal(occurredAt),
         }),
       });
       onRecord(updated);
@@ -114,8 +114,8 @@ export function IncidentFile({
   }
 
   async function saveRoster() {
-    const filled = responders.filter((row) => row.badge || row.callsign || row.name);
-    if (filled.some((row) => !row.badge || !row.callsign || !row.name || !row.role)) {
+    const filled = responders.filter((row) => row.badge || row.name);
+    if (filled.some((row) => !row.badge || !row.name || !row.role)) {
       toast.error("Complete every responder row, or clear it.");
       return;
     }
@@ -135,7 +135,7 @@ export function IncidentFile({
 
   async function saveEvent(existing?: CaseEvent) {
     const payload = {
-      occurredAt: new Date(draft.occurredAt).toISOString(),
+      occurredAt: fromDatetimeLocal(draft.occurredAt),
       badge: draft.badge,
       unit: draft.unit,
       title: draft.title,
@@ -251,11 +251,10 @@ export function IncidentFile({
             ) : null}
           </div>
           <div className="overflow-x-auto rounded-md border border-white/8">
-            <table className="w-full min-w-[520px] text-left text-sm">
+            <table className="w-full min-w-[420px] text-left text-sm">
               <thead className="bg-white/[0.03] text-[10px] uppercase tracking-[0.14em] text-fog">
                 <tr>
                   <th className="px-3 py-2 font-medium">Badge</th>
-                  <th className="px-3 py-2 font-medium">Callsign</th>
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Role</th>
                   {canEdit ? <th className="px-3 py-2" /> : null}
@@ -264,12 +263,12 @@ export function IncidentFile({
               <tbody>
                 {responders.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-3 py-4 text-fog">No units recorded.</td>
+                    <td colSpan={4} className="px-3 py-4 text-fog">No units recorded.</td>
                   </tr>
                 ) : null}
                 {responders.map((row, index) => (
                   <tr key={row.id || index} className="border-t border-white/6">
-                    {(["badge", "callsign", "name"] as const).map((field) => (
+                    {(["badge", "name"] as const).map((field) => (
                       <td key={field} className="px-2 py-2">
                         {canEdit ? (
                           <Input
@@ -374,6 +373,9 @@ export function IncidentFile({
                         </div>
                       </div>
                       <h3 className="mt-1 text-sm font-medium">{event.title}</h3>
+                      {event.findings ? (
+                        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-fog">Description</p>
+                      ) : null}
                       <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/85">{event.findings}</p>
                     </button>
                     {canEditEvent || canDeleteEvent ? (
@@ -438,7 +440,7 @@ export function IncidentFile({
               <Input id="detail-location" value={location} onChange={(event) => setLocation(event.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="detail-time">Date and time</Label>
+              <Label htmlFor="detail-time">Date and time (EST)</Label>
               <Input id="detail-time" type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} />
             </div>
           </div>
@@ -466,7 +468,7 @@ function EventForm({
   return (
     <div className="mb-4 space-y-2 rounded-md border border-white/10 bg-ink p-3">
       <div className="grid gap-2 sm:grid-cols-2">
-        <Input aria-label="Event time" type="datetime-local" value={draft.occurredAt} onChange={(event) => setDraft({ ...draft, occurredAt: event.target.value })} />
+        <Input aria-label="Event time (EST)" type="datetime-local" value={draft.occurredAt} onChange={(event) => setDraft({ ...draft, occurredAt: event.target.value })} />
         <Select value={draft.eventType} onValueChange={(eventType) => setDraft({ ...draft, eventType })}>
           <SelectTrigger aria-label="Event type"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -479,7 +481,10 @@ function EventForm({
         <Input aria-label="Unit" className="font-mono" placeholder="Unit" value={draft.unit} onChange={(event) => setDraft({ ...draft, unit: event.target.value })} />
       </div>
       <Input aria-label="Event title" placeholder="Event title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
-      <Textarea aria-label="Findings" placeholder="What was found or done" value={draft.findings} onChange={(event) => setDraft({ ...draft, findings: event.target.value })} />
+      <div className="space-y-2">
+        <Label htmlFor="event-description">Description</Label>
+        <Textarea id="event-description" aria-label="Description" placeholder="What happened" value={draft.findings} onChange={(event) => setDraft({ ...draft, findings: event.target.value })} />
+      </div>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
         <Button type="button" size="sm" onClick={onSave}>Save event</Button>
