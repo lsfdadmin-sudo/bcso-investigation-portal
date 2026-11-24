@@ -185,7 +185,25 @@ export function CaseBoard() {
             >
               <div className="flex items-start justify-between gap-3">
                 <span className="font-mono text-xs tracking-[0.14em] text-gold-bright">{item.caseNumber}</span>
-                <Badge variant={item.status === "open" ? "open" : "closed"}>{item.status === "open" ? "Open" : "Closed"}</Badge>
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  <Badge variant={item.status === "open" ? "open" : "closed"}>{item.status === "open" ? "Open" : "Closed"}</Badge>
+                  {item.status === "closed" && item.closure ? (
+                    item.closure.anyoneCharged ? (
+                      item.closure.arrestReports.map((report, index) => (
+                        <span
+                          key={`${report}-${index}`}
+                          className="inline-flex items-center rounded border border-signal-cyan/35 bg-signal-cyan/10 px-1.5 py-0.5 font-mono text-[10px] tracking-[0.04em] text-signal-cyan"
+                        >
+                          {report}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="inline-flex items-center rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.14em] text-fog">
+                        No charges
+                      </span>
+                    )
+                  ) : null}
+                </div>
               </div>
               <h2 className="mt-3 font-display text-2xl tracking-wide">{item.incidentType}</h2>
               <p className="mt-2 flex items-start gap-2 text-sm text-fog">

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { CaseClosurePanel } from "@/components/case/case-closure-panel";
 import { useSession } from "@/components/session";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,6 +36,7 @@ export function IncidentFile({
   expandAllEvidence,
   evidenceCounts,
   onRevealEvent,
+  onEditClosure,
 }: {
   record: CaseDetail;
   onRecord: (record: CaseDetail) => void;
@@ -43,6 +45,7 @@ export function IncidentFile({
   expandAllEvidence: boolean;
   evidenceCounts: Record<string, number>;
   onRevealEvent: (eventId: string) => void;
+  onEditClosure: () => void;
 }) {
   const { role, badge } = useSession();
   const locked = record.status === "closed";
@@ -219,6 +222,7 @@ export function IncidentFile({
   return (
     <div className="h-full overflow-y-auto bg-[#0c1118]">
       <div className="space-y-8 px-4 py-5 sm:px-6">
+        {record.status === "closed" ? <CaseClosurePanel record={record} onEdit={onEditClosure} /> : null}
         <section>
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">Incident narrative</h2>

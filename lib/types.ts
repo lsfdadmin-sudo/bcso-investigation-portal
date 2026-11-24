@@ -125,6 +125,27 @@ export type CaseEvent = {
   updatedAt: string;
 };
 
+export type CaseClosureSummary = {
+  anyoneCharged: boolean;
+  arrestReports: string[];
+};
+
+export type ChargedIndividual = {
+  id: string;
+  suspectNodeId: string | null;
+  name: string;
+  charges: string;
+  arrestReport: string;
+};
+
+export type CaseClosure = CaseClosureSummary & {
+  notes: string;
+  closedAt: string;
+  closedBy: string;
+  updatedAt: string;
+  charges: ChargedIndividual[];
+};
+
 export type CaseSummary = {
   id: string;
   caseNumber: string;
@@ -141,11 +162,13 @@ export type CaseSummary = {
   eventCount: number;
   suspectCount: number;
   evidenceCount: number;
+  closure: CaseClosureSummary | null;
 };
 
-export type CaseDetail = CaseSummary & {
+export type CaseDetail = Omit<CaseSummary, "closure"> & {
   responders: Responder[];
   events: CaseEvent[];
+  closure: CaseClosure | null;
 };
 
 export type GraphData = {

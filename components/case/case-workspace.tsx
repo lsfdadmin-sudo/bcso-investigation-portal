@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, MapPin } from "lucide-react";
 import { toast } from "sonner";
+import { CloseCaseDialog } from "@/components/case/close-case-dialog";
 import { GraphPane } from "@/components/case/graph-pane";
 import { IncidentFile } from "@/components/case/incident-file";
 import { LiveDot } from "@/components/live/live-dot";
@@ -11,18 +12,10 @@ import { useLiveStream } from "@/components/live/use-live-stream";
 import { useSession } from "@/components/session";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { api, ApiError } from "@/lib/client";
 import { formatWhen } from "@/lib/format";
 import { can } from "@/lib/permissions";
-import type { CaseDetail, CaseStatus, GraphData } from "@/lib/types";
+import type { CaseDetail, GraphData } from "@/lib/types";
 
 export function CaseWorkspace({ caseId }: { caseId: string }) {
   const { role } = useSession();
@@ -33,7 +26,8 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
   const [loading, setLoading] = useState(true);
   const [left, setLeft] = useState(42);
   const [pane, setPane] = useState<"file" | "graph">("file");
-  const [confirmClose, setConfirmClose] = useState(false);
+  const [closureOpen, setClosureOpen] = useState(false);
+  const [closureMode, setClosureMode] = useState<"close" | "edit">("close");
   const [expandedEventIds, setExpandedEventIds] = useState<string[]>([]);
   const [expandAllEvidence, setExpandAllEvidence] = useState(false);
   const [activeEventId, setActiveEventId] = useState<string | null>(null);
@@ -76,6 +70,14 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
     scheduleRefresh();
   });
 
+  const suspects = useMemo(
+    () =>
+      (graph?.nodes ?? []).flatMap((node) =>
+        node.kind === "suspect" && node.payload.name.trim() ? [{ id: node.id, name: node.payload.name }] : [],
+      ),
+    [graph],
+  );
+
   const evidenceCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const node of graph?.nodes ?? []) {
@@ -115,16 +117,15 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
     setRevision((value) => value + 1);
   }
 
-  async function setStatus(status: CaseStatus) {
+  async function reopenCase() {
     if (!record) return;
     try {
       const updated = await api<CaseDetail>(`/api/cases/${record.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status: "open" }),
       });
       setRecord(updated);
-      setConfirmClose(false);
-      toast.success(status === "closed" ? "Case closed." : "Case reopened.");
+      toast.success("Case reopened.");
     } catch (caught) {
       toast.error(caught instanceof ApiError ? caught.message : "Status was not changed.");
     }
@@ -219,7 +220,7 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
                 type="button"
                 className={`rounded px-3 py-1 text-xs ${record.status === "open" ? "bg-status-amber/15 text-status-amber" : "text-fog"}`}
                 onClick={() => {
-                  if (record.status !== "open") void setStatus("open");
+                  if (record.status !== "open") void reopenCase();
                 }}
               >
                 Open
@@ -228,7 +229,10 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
                 type="button"
                 className={`rounded px-3 py-1 text-xs ${record.status === "closed" ? "bg-status-emerald/15 text-status-emerald" : "text-fog"}`}
                 onClick={() => {
-                  if (record.status === "open") setConfirmClose(true);
+                  if (record.status === "open") {
+                    setClosureMode("close");
+                    setClosureOpen(true);
+                  }
                 }}
               >
                 Closed
@@ -260,6 +264,10 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
             expandAllEvidence={expandAllEvidence}
             evidenceCounts={evidenceCounts}
             onRevealEvent={toggleEvent}
+            onEditClosure={() => {
+              setClosureMode("edit");
+              setClosureOpen(true);
+            }}
           />
         </div>
         <div
@@ -287,24 +295,17 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
           />
         </div>
       </div>
-      <Dialog open={confirmClose} onOpenChange={setConfirmClose}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Close this case?</DialogTitle>
-            <DialogDescription>
-              The file locks for every role until an administrator reopens it. Events, the narrative, and the link chart stay on the record.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="secondary" onClick={() => setConfirmClose(false)}>
-              Keep open
-            </Button>
-            <Button type="button" onClick={() => void setStatus("closed")}>
-              Close case
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CloseCaseDialog
+        open={closureOpen}
+        mode={closureMode}
+        record={record}
+        suspects={suspects}
+        onOpenChange={setClosureOpen}
+        onSaved={(updated) => {
+          setRecord(updated);
+          setClosureOpen(false);
+        }}
+      />
     </div>
   );
 }

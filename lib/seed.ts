@@ -24,6 +24,17 @@ type NodeSeed = {
   photo?: { id: string; scene: StillScene; caption: string; stamp: string; name: string };
 };
 type EdgeSeed = { id: string; source: string; target: string; label: string };
+type ClosureSeed = {
+  anyoneCharged: boolean;
+  notes: string;
+  charges: {
+    id: string;
+    suspectNodeId: string | null;
+    name: string;
+    charges: string;
+    arrestReport: string;
+  }[];
+};
 type CaseSeed = {
   id: string;
   caseNumber: string;
@@ -41,6 +52,22 @@ type CaseSeed = {
   events: EventSeed[];
   nodes: NodeSeed[];
   edges: EdgeSeed[];
+  closure?: ClosureSeed;
+};
+
+const CASSIDY_CLOSURE: ClosureSeed = {
+  anyoneCharged: true,
+  notes:
+    "Cleared by arrest. The district attorney accepted the filing. The supervisor verified the Backdraft CAD arrest report before the file was closed.",
+  charges: [
+    {
+      id: "cassidy_charge_quinn",
+      suspectNodeId: "cassidy_quinn",
+      name: "Samuel Quinn",
+      charges: "Murder — PC 187(a); personal use of a firearm — PC 12022.5(a).",
+      arrestReport: "RPT-261124-21751",
+    },
+  ],
 };
 
 const CASES: CaseSeed[] = [
@@ -966,6 +993,7 @@ const CASES: CaseSeed[] = [
       { id: "cassidy_e9", source: "cassidy_boot", target: "cassidy_cabin", label: "Recovered At" },
       { id: "cassidy_e10", source: "cassidy_gun", target: "cassidy_turnout", label: "Recovered At" },
     ],
+    closure: CASSIDY_CLOSURE,
   },
 ];
 
@@ -980,6 +1008,40 @@ export function backfillEvidenceEvents(database: DatabaseSync) {
       if (node.kind === "evidence" && node.eventId) update.run(node.eventId, node.id, node.eventId);
     }
   }
+}
+
+function insertClosure(
+  database: DatabaseSync,
+  caseId: string,
+  closure: ClosureSeed,
+  closedAt: string,
+  closedBy: string,
+) {
+  database
+    .prepare(
+      `INSERT INTO case_closures (case_id, anyone_charged, notes, closed_at, closed_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(caseId, closure.anyoneCharged ? 1 : 0, closure.notes, closedAt, closedBy, closedAt);
+  const insertCharge = database.prepare(
+    `INSERT INTO case_charges (id, case_id, suspect_node_id, name, charges, arrest_report, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  closure.charges.forEach((charge, index) => {
+    insertCharge.run(charge.id, caseId, charge.suspectNodeId, charge.name, charge.charges, charge.arrestReport, index);
+  });
+}
+
+export function backfillCaseClosures(database: DatabaseSync) {
+  const row = database.prepare("SELECT id, status, closed_at, closed_by FROM cases WHERE id = ?").get("case_cassidy") as
+    | { id: string; status: string; closed_at: string | null; closed_by: string | null }
+    | undefined;
+  if (!row || row.status !== "closed" || !row.closed_at) return;
+  const existing = database.prepare("SELECT case_id FROM case_closures WHERE case_id = ?").get(row.id) as
+    | { case_id: string }
+    | undefined;
+  if (existing) return;
+  insertClosure(database, row.id, CASSIDY_CLOSURE, row.closed_at, row.closed_by ?? "D-08");
 }
 
 export function seedPortal(database: DatabaseSync) {
@@ -1081,6 +1143,9 @@ export function seedPortal(database: DatabaseSync) {
     }
     for (const edge of item.edges) {
       insertEdge.run(edge.id, item.id, edge.source, edge.target, "b", "t", edge.label, item.createdAt);
+    }
+    if (item.closure && item.closedAt) {
+      insertClosure(database, item.id, item.closure, item.closedAt, item.closedBy ?? item.createdBy);
     }
   }
 }

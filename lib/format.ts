@@ -22,6 +22,24 @@ export function formatWhen(iso: string | null | undefined) {
   return pacific.format(date);
 }
 
+const easternStandard = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZone: "Etc/GMT+5",
+});
+
+/** Fixed Eastern Standard Time (UTC−5), including dates that fall during daylight saving. */
+export function formatWhenEst(iso: string | null | undefined) {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return `${easternStandard.format(date)} EST`;
+}
+
 export function formatDay(iso: string | null | undefined) {
   if (!iso) return "—";
   const date = new Date(iso);

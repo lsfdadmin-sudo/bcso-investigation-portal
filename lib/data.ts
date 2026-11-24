@@ -2,17 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { arrestReportError, normalizeArrestReport } from "./arrest-report";
 import { EVIDENCE_CATEGORIES, SUSPECT_STATUSES } from "./constants";
 import { getDb, transaction } from "./db";
 import { HttpError } from "./http";
 import { emitLive } from "./live";
 import { uploadDir } from "./paths";
 import type {
+  CaseClosure,
+  CaseClosureSummary,
   CaseDetail,
   CaseEvent,
   CasePayload,
   CaseStatus,
   CaseSummary,
+  ChargedIndividual,
   EvidenceCategory,
   EvidencePayload,
   GraphData,
@@ -76,7 +80,7 @@ function asDate(value: unknown, label: string) {
   return date.toISOString();
 }
 
-function mapSummary(row: CaseRow): CaseSummary {
+function mapSummary(row: CaseRow, closure: CaseClosureSummary | null = null): CaseSummary {
   return {
     id: row.id,
     caseNumber: row.case_number,
@@ -93,6 +97,7 @@ function mapSummary(row: CaseRow): CaseSummary {
     eventCount: Number(row.event_count ?? 0),
     suspectCount: Number(row.suspect_count ?? 0),
     evidenceCount: Number(row.evidence_count ?? 0),
+    closure,
   };
 }
 
@@ -257,8 +262,12 @@ export function listCases(filters: { status: CaseStatus; q?: string; type?: stri
     .prepare("SELECT DISTINCT incident_type FROM cases ORDER BY incident_type COLLATE NOCASE")
     .all() as { incident_type: string }[];
 
+  const closures = closureSummariesFor(
+    database,
+    rows.map((row) => row.id),
+  );
   return {
-    cases: rows.map(mapSummary),
+    cases: rows.map((row) => mapSummary(row, closures.get(row.id) ?? null)),
     counts: {
       open: Number(counts.find((row) => row.status === "open")?.count ?? 0),
       closed: Number(counts.find((row) => row.status === "closed")?.count ?? 0),
@@ -320,7 +329,7 @@ export function getCaseDetail(id: string): CaseDetail {
     )
     .get(id) as CaseRow | undefined;
   if (!row) throw new HttpError("Case file not found.", 404);
-  return { ...mapSummary(row), responders: respondersFor(database, id), events: eventsFor(database, id) };
+  return detailFrom(database, row);
 }
 
 export type ResponderInput = { badge: string; callsign: string; name: string; role: string };
@@ -391,7 +400,91 @@ function getCaseDetailFrom(database: DatabaseSync, id: string): CaseDetail {
       FROM cases c WHERE c.id = ?`,
     )
     .get(id) as CaseRow;
-  return { ...mapSummary(row), responders: respondersFor(database, id), events: eventsFor(database, id) };
+  return detailFrom(database, row);
+}
+
+type ClosureHeader = {
+  case_id: string;
+  anyone_charged: number;
+  notes: string;
+  closed_at: string;
+  closed_by: string;
+  updated_at: string;
+};
+
+type ChargeRow = {
+  id: string;
+  case_id: string;
+  suspect_node_id: string | null;
+  name: string;
+  charges: string;
+  arrest_report: string;
+  sort_order: number;
+};
+
+function mapCharge(row: ChargeRow): ChargedIndividual {
+  return {
+    id: row.id,
+    suspectNodeId: row.suspect_node_id,
+    name: row.name,
+    charges: row.charges,
+    arrestReport: row.arrest_report,
+  };
+}
+
+function closureFor(database: DatabaseSync, caseId: string): CaseClosure | null {
+  const row = database.prepare("SELECT * FROM case_closures WHERE case_id = ?").get(caseId) as ClosureHeader | undefined;
+  if (!row) return null;
+  const charges = (
+    database
+      .prepare(
+        `SELECT id, case_id, suspect_node_id, name, charges, arrest_report, sort_order
+         FROM case_charges WHERE case_id = ? ORDER BY sort_order ASC, name ASC`,
+      )
+      .all(caseId) as ChargeRow[]
+  ).map(mapCharge);
+  return {
+    anyoneCharged: row.anyone_charged === 1,
+    arrestReports: row.anyone_charged === 1 ? charges.map((charge) => charge.arrestReport) : [],
+    notes: row.notes,
+    closedAt: row.closed_at,
+    closedBy: row.closed_by,
+    updatedAt: row.updated_at,
+    charges: row.anyone_charged === 1 ? charges : [],
+  };
+}
+
+function closureSummariesFor(database: DatabaseSync, caseIds: string[]) {
+  const map = new Map<string, CaseClosureSummary>();
+  if (caseIds.length === 0) return map;
+  const marks = caseIds.map(() => "?").join(", ");
+  const headers = database
+    .prepare(`SELECT case_id, anyone_charged FROM case_closures WHERE case_id IN (${marks})`)
+    .all(...caseIds) as { case_id: string; anyone_charged: number }[];
+  const charges = database
+    .prepare(
+      `SELECT case_id, arrest_report FROM case_charges
+       WHERE case_id IN (${marks}) ORDER BY sort_order ASC, name ASC`,
+    )
+    .all(...caseIds) as { case_id: string; arrest_report: string }[];
+  for (const header of headers) {
+    map.set(header.case_id, { anyoneCharged: header.anyone_charged === 1, arrestReports: [] });
+  }
+  for (const charge of charges) {
+    const summary = map.get(charge.case_id);
+    if (summary?.anyoneCharged) summary.arrestReports.push(charge.arrest_report);
+  }
+  return map;
+}
+
+function detailFrom(database: DatabaseSync, row: CaseRow): CaseDetail {
+  const closure = closureFor(database, row.id);
+  return {
+    ...mapSummary(row, closure),
+    responders: respondersFor(database, row.id),
+    events: eventsFor(database, row.id),
+    closure,
+  };
 }
 
 export function updateCase(
@@ -405,6 +498,7 @@ export function updateCase(
   },
   badge: string,
 ) {
+  void badge;
   const existingStatus = mustCase(id).status;
   const updated = transaction((database) => {
     const existing = mustCase(id, database);
@@ -424,9 +518,12 @@ export function updateCase(
     let closedBy = existing.closed_by;
     if (patch.status && patch.status !== existing.status) {
       if (patch.status !== "open" && patch.status !== "closed") throw new HttpError("Status must be open or closed.", 400);
+      if (patch.status === "closed") {
+        throw new HttpError("Record a Backdraft CAD disposition before closing this case.", 400);
+      }
       status = patch.status;
-      closedAt = status === "closed" ? nowIso() : null;
-      closedBy = status === "closed" ? badge : null;
+      closedAt = null;
+      closedBy = null;
     }
     const stamp = nowIso();
     database
@@ -445,6 +542,112 @@ export function updateCase(
     kind: patch.status && patch.status !== existingStatus ? "status" : "case",
     action: "update",
   });
+  return updated;
+}
+
+function requireArrestReport(value: unknown) {
+  if (typeof value !== "string") throw new HttpError("Backdraft CAD arrest report number is required.", 400);
+  const error = arrestReportError(value);
+  if (error) throw new HttpError(error, 400);
+  return normalizeArrestReport(value);
+}
+
+function chargedFrom(database: DatabaseSync, caseId: string, raw: unknown) {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new HttpError("Add at least one charged individual.", 400);
+  }
+  if (raw.length > 24) throw new HttpError("A closure can list up to 24 charged individuals.", 400);
+  return raw.map((item) => {
+    const value = asRecord(item);
+    const suspectNodeId =
+      typeof value.suspectNodeId === "string" && value.suspectNodeId.trim() ? value.suspectNodeId.trim() : null;
+    let name = optionalText(value.name, "Who was charged", 80);
+    if (suspectNodeId) {
+      const node = database
+        .prepare("SELECT kind, payload FROM nodes WHERE id = ? AND case_id = ?")
+        .get(suspectNodeId, caseId) as { kind: string; payload: string } | undefined;
+      if (!node || node.kind !== "suspect") {
+        throw new HttpError("Choose a suspect on this case, or type a name.", 400);
+      }
+      if (!name) {
+        try {
+          const payload = JSON.parse(node.payload) as { name?: unknown };
+          name = typeof payload.name === "string" ? payload.name.trim() : "";
+        } catch {
+          name = "";
+        }
+      }
+    }
+    name = text(name, "Who was charged", 80);
+    const charges = text(value.charges, "Charges", 2000);
+    const arrestReport = requireArrestReport(value.arrestReport);
+    return { suspectNodeId, name, charges, arrestReport };
+  });
+}
+
+export function saveCaseClosure(
+  caseId: string,
+  input: { anyoneCharged: boolean; notes?: unknown; charges?: unknown },
+  badge: string,
+  access: { allowClose: boolean; allowEdit: boolean },
+) {
+  const updated = transaction((database) => {
+    const existing = mustCase(caseId, database);
+    const transitioning = existing.status !== "closed";
+    if (transitioning && !access.allowClose) {
+      throw new HttpError("Insufficient clearance for this action.", 403);
+    }
+    if (!transitioning && !access.allowEdit && !access.allowClose) {
+      throw new HttpError("Insufficient clearance for this action.", 403);
+    }
+    const anyoneCharged = input.anyoneCharged === true;
+    const notes = optionalText(input.notes ?? "", "Closure notes", 4000);
+    const charges = anyoneCharged ? chargedFrom(database, caseId, input.charges) : [];
+    const stamp = nowIso();
+    const prior = database
+      .prepare("SELECT closed_at, closed_by FROM case_closures WHERE case_id = ?")
+      .get(caseId) as { closed_at: string; closed_by: string } | undefined;
+    const closedAt = transitioning ? stamp : existing.closed_at ?? prior?.closed_at ?? stamp;
+    const closedBy = transitioning ? badge : existing.closed_by ?? prior?.closed_by ?? badge;
+    const closureClosedAt = !transitioning && prior ? prior.closed_at : closedAt;
+    const closureClosedBy = !transitioning && prior ? prior.closed_by : closedBy;
+
+    database
+      .prepare(
+        `UPDATE cases
+         SET status = 'closed', closed_at = ?, closed_by = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(closedAt, closedBy, stamp, caseId);
+
+    if (prior) {
+      database
+        .prepare(
+          `UPDATE case_closures
+           SET anyone_charged = ?, notes = ?, closed_at = ?, closed_by = ?, updated_at = ?
+           WHERE case_id = ?`,
+        )
+        .run(anyoneCharged ? 1 : 0, notes, closureClosedAt, closureClosedBy, stamp, caseId);
+    } else {
+      database
+        .prepare(
+          `INSERT INTO case_closures (case_id, anyone_charged, notes, closed_at, closed_by, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(caseId, anyoneCharged ? 1 : 0, notes, closureClosedAt, closureClosedBy, stamp);
+    }
+
+    database.prepare("DELETE FROM case_charges WHERE case_id = ?").run(caseId);
+    const insert = database.prepare(
+      `INSERT INTO case_charges (id, case_id, suspect_node_id, name, charges, arrest_report, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    charges.forEach((charge, index) => {
+      insert.run(randomUUID(), caseId, charge.suspectNodeId, charge.name, charge.charges, charge.arrestReport, index);
+    });
+    return getCaseDetailFrom(database, caseId);
+  });
+  emitLive({ caseId, kind: "status", action: "update" });
   return updated;
 }
 
