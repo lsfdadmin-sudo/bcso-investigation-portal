@@ -3,7 +3,7 @@
 import { Pencil } from "lucide-react";
 import { useSession } from "@/components/session";
 import { Button } from "@/components/ui/button";
-import { formatWhenEst } from "@/lib/format";
+import { formatWhen } from "@/lib/format";
 import { can } from "@/lib/permissions";
 import type { CaseDetail } from "@/lib/types";
 
@@ -31,7 +31,7 @@ export function CaseClosurePanel({ record, onEdit }: { record: CaseDetail; onEdi
               {disposition}
             </span>
             <span className="font-mono text-[11px] text-fog">
-              {formatWhenEst(closedAt)}
+              {formatWhen(closedAt)}
               {closure?.closedBy ? ` · Badge ${closure.closedBy}` : ""}
             </span>
           </div>

@@ -1,14 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, MapPin } from "lucide-react";
 import { toast } from "sonner";
 import { CloseCaseDialog } from "@/components/case/close-case-dialog";
-import { GraphPane } from "@/components/case/graph-pane";
 import { IncidentFile } from "@/components/case/incident-file";
-import { LiveDot } from "@/components/live/live-dot";
-import { useLiveStream } from "@/components/live/use-live-stream";
+import { InvestigationBoard } from "@/components/case/investigation-board";
 import { useSession } from "@/components/session";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,20 +19,16 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
   const { role } = useSession();
   const [record, setRecord] = useState<CaseDetail | null>(null);
   const [graph, setGraph] = useState<GraphData | null>(null);
-  const [revision, setRevision] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [left, setLeft] = useState(42);
-  const [pane, setPane] = useState<"file" | "graph">("file");
+  const [left, setLeft] = useState(40);
+  const [pane, setPane] = useState<"file" | "board">("file");
   const [closureOpen, setClosureOpen] = useState(false);
   const [closureMode, setClosureMode] = useState<"close" | "edit">("close");
-  const [expandedEventIds, setExpandedEventIds] = useState<string[]>([]);
-  const [expandAllEvidence, setExpandAllEvidence] = useState(false);
-  const [activeEventId, setActiveEventId] = useState<string | null>(null);
-  const [focus, setFocus] = useState<{ nonce: number; eventId: string | null }>({ nonce: 0, eventId: null });
-  const refreshTimer = useRef<number | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [live, setLive] = useState(false);
 
-  const load = useCallback(async (mode: "initial" | "live" = "initial") => {
+  const load = useCallback(async () => {
     try {
       const [nextRecord, nextGraph] = await Promise.all([
         api<CaseDetail>(`/api/cases/${caseId}`),
@@ -42,79 +36,42 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
       ]);
       setRecord(nextRecord);
       setGraph(nextGraph);
-      setRevision((value) => value + 1);
       setError("");
     } catch (caught) {
-      const missing = caught instanceof ApiError && caught.status === 404;
-      if (mode === "live" && !missing) return;
       setError(caught instanceof ApiError ? caught.message : "The case file could not be opened.");
-      if (missing) {
-        setRecord(null);
-        setGraph(null);
-      }
     } finally {
-      if (mode === "initial") setLoading(false);
+      setLoading(false);
     }
   }, [caseId]);
 
-  const scheduleRefresh = useCallback(() => {
-    if (refreshTimer.current) return;
-    refreshTimer.current = window.setTimeout(() => {
-      refreshTimer.current = null;
-      void load("live");
-    }, 160);
-  }, [load]);
-
-  const liveStatus = useLiveStream(`/api/cases/${caseId}/stream`, (event) => {
-    if (event.kind === "positions") return;
-    scheduleRefresh();
-  });
-
-  const suspects = useMemo(
-    () =>
-      (graph?.nodes ?? []).flatMap((node) =>
-        node.kind === "suspect" && node.payload.name.trim() ? [{ id: node.id, name: node.payload.name }] : [],
-      ),
-    [graph],
-  );
-
-  const evidenceCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const node of graph?.nodes ?? []) {
-      if (node.kind === "evidence" && node.eventId) counts[node.eventId] = (counts[node.eventId] ?? 0) + 1;
-    }
-    return counts;
-  }, [graph]);
-
   useEffect(() => {
-    void load("initial");
+    void load();
   }, [load]);
 
   useEffect(() => {
-    return () => {
-      if (refreshTimer.current) window.clearTimeout(refreshTimer.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!record) return;
-    const ids = new Set(record.events.map((event) => event.id));
-    setExpandedEventIds((current) => {
-      const next = current.filter((id) => ids.has(id));
-      return next.length === current.length ? current : next;
+    const source = new EventSource(`/api/cases/${caseId}/live`);
+    source.onopen = () => setLive(true);
+    source.onerror = () => setLive(false);
+    source.addEventListener("update", () => {
+      void load();
     });
-    setActiveEventId((current) => (current && ids.has(current) ? current : null));
-  }, [record]);
+    return () => source.close();
+  }, [caseId, load]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("bcso-split");
-    const value = stored ? Number(stored) : 42;
+    const value = stored ? Number(stored) : 40;
     if (value >= 28 && value <= 68) setLeft(value);
   }, []);
 
+  useEffect(() => {
+    if (selectedEventId && record && !record.events.some((event) => event.id === selectedEventId)) {
+      setSelectedEventId(null);
+    }
+  }, [record, selectedEventId]);
+
   function acceptGraph(next: GraphData) {
     setGraph(next);
-    setRevision((value) => value + 1);
   }
 
   async function reopenCase() {
@@ -171,84 +128,18 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
   }
 
   const admin = can(role, "case:status");
-
-  function toggleEvent(eventId: string) {
-    if (!record) return;
-    setActiveEventId(eventId);
-    setPane("graph");
-    setFocus({ nonce: Date.now(), eventId });
-    if (expandAllEvidence) {
-      setExpandAllEvidence(false);
-      setExpandedEventIds(record.events.filter((event) => event.id !== eventId).map((event) => event.id));
-      return;
-    }
-    setExpandedEventIds((current) => (current.includes(eventId) ? current.filter((id) => id !== eventId) : [...current, eventId]));
-  }
-
-  function setAllEvidence(open: boolean) {
-    setExpandAllEvidence(open);
-    if (!open) setExpandedEventIds([]);
-    setFocus({ nonce: Date.now(), eventId: null });
-  }
+  const suspects = graph.nodes.flatMap((node) =>
+    node.kind === "suspect" && node.payload.name.trim() ? [{ id: node.id, name: node.payload.name }] : [],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 px-4 py-3 sm:px-5">
-        <div className="min-w-0">
-          <Link href="/board" className="inline-flex items-center gap-1 text-xs text-fog hover:text-foreground">
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Case board
-          </Link>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <span className="font-mono text-sm tracking-[0.14em] text-gold-bright">{record.caseNumber}</span>
-            <h1 className="font-display text-2xl tracking-wide sm:text-3xl">{record.incidentType}</h1>
-          </div>
-          <p className="mt-1 flex items-start gap-2 text-sm text-fog">
-            <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              {record.location}
-              <span className="mx-2 text-white/20">·</span>
-              <span className="font-mono text-xs">{formatWhen(record.occurredAt)} PT</span>
-            </span>
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <LiveDot status={liveStatus} />
-          {admin ? (
-            <div className="inline-flex rounded-md border border-white/10 p-0.5">
-              <button
-                type="button"
-                className={`rounded px-3 py-1 text-xs ${record.status === "open" ? "bg-status-amber/15 text-status-amber" : "text-fog"}`}
-                onClick={() => {
-                  if (record.status !== "open") void reopenCase();
-                }}
-              >
-                Open
-              </button>
-              <button
-                type="button"
-                className={`rounded px-3 py-1 text-xs ${record.status === "closed" ? "bg-status-emerald/15 text-status-emerald" : "text-fog"}`}
-                onClick={() => {
-                  if (record.status === "open") {
-                    setClosureMode("close");
-                    setClosureOpen(true);
-                  }
-                }}
-              >
-                Closed
-              </button>
-            </div>
-          ) : (
-            <Badge variant={record.status === "open" ? "open" : "closed"}>{record.status === "open" ? "Open" : "Closed"}</Badge>
-          )}
-        </div>
-      </div>
       <div className="flex border-b border-white/8 lg:hidden">
         <button type="button" className={`flex-1 py-2 text-sm ${pane === "file" ? "text-gold" : "text-fog"}`} onClick={() => setPane("file")}>
           Incident file
         </button>
-        <button type="button" className={`flex-1 py-2 text-sm ${pane === "graph" ? "text-gold" : "text-fog"}`} onClick={() => setPane("graph")}>
-          Link analysis
+        <button type="button" className={`flex-1 py-2 text-sm ${pane === "board" ? "text-gold" : "text-fog"}`} onClick={() => setPane("board")}>
+          Investigation board
         </button>
       </div>
       <div className="flex min-h-0 flex-1">
@@ -256,19 +147,83 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
           className={`${pane === "file" ? "flex" : "hidden"} h-full min-h-0 w-full min-w-0 flex-col lg:flex lg:w-[var(--split)] lg:max-w-[var(--split)] lg:shrink-0`}
           style={{ ["--split" as string]: `${left}%` }}
         >
-          <IncidentFile
-            record={record}
-            onRecord={setRecord}
-            activeEventId={activeEventId}
-            expandedEventIds={expandedEventIds}
-            expandAllEvidence={expandAllEvidence}
-            evidenceCounts={evidenceCounts}
-            onRevealEvent={toggleEvent}
-            onEditClosure={() => {
-              setClosureMode("edit");
-              setClosureOpen(true);
-            }}
-          />
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 px-4 py-3 sm:px-5">
+            <div className="min-w-0">
+              <Link href="/board" className="inline-flex items-center gap-1 text-xs text-fog hover:text-foreground">
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Case board
+              </Link>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="font-mono text-sm tracking-[0.14em] text-gold-bright">{record.caseNumber}</span>
+                <h1 className="font-display text-2xl tracking-wide sm:text-3xl">{record.incidentType}</h1>
+              </div>
+              <p className="mt-1 flex items-start gap-2 text-sm text-fog">
+                <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  {record.location}
+                  <span className="mx-2 text-white/20">·</span>
+                  <span className="font-mono text-xs">{formatWhen(record.occurredAt)}</span>
+                </span>
+              </p>
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] tracking-[0.16em] ${
+                  live
+                    ? "border-status-emerald/30 bg-status-emerald/10 text-status-emerald"
+                    : "border-status-amber/30 bg-status-amber/10 text-status-amber"
+                }`}
+              >
+                <span className="relative flex h-1.5 w-1.5">
+                  {live ? <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-status-emerald opacity-70" /> : null}
+                  <span className={`relative h-1.5 w-1.5 rounded-full ${live ? "bg-status-emerald" : "bg-status-amber"}`} />
+                </span>
+                {live ? "LIVE" : "SYNC"}
+              </span>
+              {admin ? (
+                <div className="inline-flex rounded-md border border-white/10 p-0.5">
+                  <button
+                    type="button"
+                    className={`rounded px-3 py-1 text-xs ${record.status === "open" ? "bg-status-amber/15 text-status-amber" : "text-fog"}`}
+                    onClick={() => {
+                      if (record.status !== "open") void reopenCase();
+                    }}
+                  >
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded px-3 py-1 text-xs ${record.status === "closed" ? "bg-status-emerald/15 text-status-emerald" : "text-fog"}`}
+                    onClick={() => {
+                      if (record.status === "open") {
+                        setClosureMode("close");
+                        setClosureOpen(true);
+                      }
+                    }}
+                  >
+                    Closed
+                  </button>
+                </div>
+              ) : (
+                <Badge variant={record.status === "open" ? "open" : "closed"}>{record.status === "open" ? "Open" : "Closed"}</Badge>
+              )}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1">
+            <IncidentFile
+              record={record}
+              onRecord={setRecord}
+              selectedEventId={selectedEventId}
+              onSelectEvent={(id) => {
+                setSelectedEventId(id);
+                if (window.matchMedia("(max-width: 1023px)").matches) setPane("board");
+              }}
+              onEditClosure={() => {
+                setClosureMode("edit");
+                setClosureOpen(true);
+              }}
+            />
+          </div>
         </div>
         <div
           role="separator"
@@ -277,21 +232,16 @@ export function CaseWorkspace({ caseId }: { caseId: string }) {
           onPointerDown={startResize}
           className="hidden w-1.5 shrink-0 cursor-col-resize bg-white/5 hover:bg-gold/70 lg:block"
         />
-        <div className={`${pane === "graph" ? "flex" : "hidden"} h-full min-h-0 min-w-0 flex-1 flex-col lg:flex`}>
-          <GraphPane
+        <div className={`${pane === "board" ? "flex" : "hidden"} h-full min-h-0 min-w-0 flex-1 flex-col lg:flex`}>
+          <InvestigationBoard
             caseId={record.id}
+            record={record}
             graph={graph}
-            events={record.events}
-            revision={revision}
             locked={record.status === "closed"}
-            expandedEventIds={expandedEventIds}
-            expandAllEvidence={expandAllEvidence}
-            activeEventId={activeEventId}
-            focusNonce={focus.nonce}
-            focusEventId={focus.eventId}
+            selectedEventId={selectedEventId}
+            onSelectEvent={setSelectedEventId}
             onGraph={acceptGraph}
-            onToggleEvent={toggleEvent}
-            onExpandAll={setAllEvidence}
+            onRecord={setRecord}
           />
         </div>
       </div>

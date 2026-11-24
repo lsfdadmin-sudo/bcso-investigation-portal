@@ -19,12 +19,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { INCIDENT_TYPES, RESPONDER_ROLES } from "@/lib/constants";
 import { ApiError, api } from "@/lib/client";
-import { toDatetimeLocal } from "@/lib/format";
+import { fromDatetimeLocal, toDatetimeLocal } from "@/lib/format";
 import type { CaseDetail } from "@/lib/types";
 
-type DraftResponder = { badge: string; callsign: string; name: string; role: string };
+type DraftResponder = { badge: string; name: string; role: string };
 
-const emptyResponder = (): DraftResponder => ({ badge: "", callsign: "", name: "", role: "Primary" });
+const emptyResponder = (): DraftResponder => ({ badge: "", name: "", role: "Primary" });
 
 export function NewCaseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const router = useRouter();
@@ -51,8 +51,8 @@ export function NewCaseDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       toast.error("Incident type, location, and date are required.");
       return;
     }
-    const filled = responders.filter((row) => row.badge || row.callsign || row.name);
-    if (filled.some((row) => !row.badge || !row.callsign || !row.name || !row.role)) {
+    const filled = responders.filter((row) => row.badge || row.name);
+    if (filled.some((row) => !row.badge || !row.name || !row.role)) {
       toast.error("Complete every responder row, or clear it.");
       return;
     }
@@ -63,7 +63,7 @@ export function NewCaseDialog({ open, onOpenChange }: { open: boolean; onOpenCha
         body: JSON.stringify({
           incidentType: type,
           location,
-          occurredAt: new Date(occurredAt).toISOString(),
+          occurredAt: fromDatetimeLocal(occurredAt),
           narrative,
           responders: filled,
         }),
@@ -91,7 +91,7 @@ export function NewCaseDialog({ open, onOpenChange }: { open: boolean; onOpenCha
         <DialogHeader>
           <DialogTitle>Open a case</DialogTitle>
           <DialogDescription>
-            Start the incident file. A case number is assigned when the file is created, and the incident becomes the root of the link chart.
+            Start the incident file. A case number is assigned when the file is created, and the incident opens on the investigation board.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -118,13 +118,13 @@ export function NewCaseDialog({ open, onOpenChange }: { open: boolean; onOpenCha
             </div>
           ) : (
             <div className="space-y-2">
-              <Label htmlFor="occurred">Date and time</Label>
+              <Label htmlFor="occurred">Date and time (EST)</Label>
               <Input id="occurred" type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} />
             </div>
           )}
           {incidentType === "Other" ? (
             <div className="space-y-2 sm:col-span-2">
-              <Label htmlFor="occurred-2">Date and time</Label>
+              <Label htmlFor="occurred-2">Date and time (EST)</Label>
               <Input id="occurred-2" type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} />
             </div>
           ) : null}
@@ -157,7 +157,7 @@ export function NewCaseDialog({ open, onOpenChange }: { open: boolean; onOpenCha
           </div>
           <div className="space-y-2">
             {responders.map((row, index) => (
-              <div key={index} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_1fr_1.3fr_1fr_auto]">
+              <div key={index} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_1.4fr_1fr_auto]">
                 <Input
                   aria-label="Responder badge"
                   placeholder="Badge"
@@ -165,15 +165,6 @@ export function NewCaseDialog({ open, onOpenChange }: { open: boolean; onOpenCha
                   className="font-mono"
                   onChange={(event) =>
                     setResponders((rows) => rows.map((item, itemIndex) => (itemIndex === index ? { ...item, badge: event.target.value } : item)))
-                  }
-                />
-                <Input
-                  aria-label="Callsign"
-                  placeholder="Callsign"
-                  value={row.callsign}
-                  className="font-mono"
-                  onChange={(event) =>
-                    setResponders((rows) => rows.map((item, itemIndex) => (itemIndex === index ? { ...item, callsign: event.target.value } : item)))
                   }
                 />
                 <Input

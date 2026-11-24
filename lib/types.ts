@@ -7,7 +7,7 @@ export type Session = {
 
 export type CaseStatus = "open" | "closed";
 
-export type SuspectStatus = "at_large" | "in_custody" | "witness" | "person_of_interest";
+export type SuspectStatus = "at_large" | "in_custody" | "witness" | "person_of_interest" | "victim";
 
 export type EvidenceCategory =
   | "weapon"
@@ -45,6 +45,7 @@ export type EvidencePayload = {
   tag: string;
   category: EvidenceCategory;
   description: string;
+  findings: string;
   custody: string;
   notes: string;
 };
@@ -80,7 +81,6 @@ export type GraphNode =
       kind: "evidence";
       x: number;
       y: number;
-      eventId: string | null;
       payload: EvidencePayload;
       photos: Photo[];
       updatedAt: string;
@@ -101,6 +101,13 @@ export type GraphEdge = {
   targetId: string;
   sourceHandle: string | null;
   targetHandle: string | null;
+  label: string;
+};
+
+export type EventLink = {
+  id: string;
+  eventId: string;
+  nodeId: string;
   label: string;
 };
 
@@ -174,4 +181,5 @@ export type CaseDetail = Omit<CaseSummary, "closure"> & {
 export type GraphData = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  eventLinks: EventLink[];
 };

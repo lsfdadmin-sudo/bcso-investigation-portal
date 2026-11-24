@@ -19,7 +19,6 @@ type NodeSeed = {
   kind: "case" | "suspect" | "evidence" | "related";
   x: number;
   y: number;
-  eventId?: string | null;
   payload: Record<string, unknown>;
   photo?: { id: string; scene: StillScene; caption: string; stamp: string; name: string };
 };
@@ -35,6 +34,7 @@ type ClosureSeed = {
     arrestReport: string;
   }[];
 };
+type EventLinkSeed = { id: string; event: string; node: string; label: string };
 type CaseSeed = {
   id: string;
   caseNumber: string;
@@ -218,7 +218,6 @@ const CASES: CaseSeed[] = [
       {
         id: "sandy_mask",
         kind: "evidence",
-        eventId: "sandy_ev4",
         x: 820,
         y: 40,
         payload: {
@@ -239,7 +238,6 @@ const CASES: CaseSeed[] = [
       {
         id: "sandy_dvr",
         kind: "evidence",
-        eventId: "sandy_ev5",
         x: 820,
         y: 250,
         payload: {
@@ -260,7 +258,6 @@ const CASES: CaseSeed[] = [
       {
         id: "sandy_gun",
         kind: "evidence",
-        eventId: "sandy_ev6",
         x: 820,
         y: 470,
         payload: {
@@ -281,7 +278,6 @@ const CASES: CaseSeed[] = [
       {
         id: "sandy_truck",
         kind: "evidence",
-        eventId: "sandy_ev5",
         x: 430,
         y: 480,
         payload: {
@@ -459,7 +455,6 @@ const CASES: CaseSeed[] = [
       {
         id: "paleto_bricks",
         kind: "evidence",
-        eventId: "paleto_ev2",
         x: 800,
         y: 40,
         payload: {
@@ -480,7 +475,6 @@ const CASES: CaseSeed[] = [
       {
         id: "paleto_phone",
         kind: "evidence",
-        eventId: "paleto_ev2",
         x: 800,
         y: 260,
         payload: {
@@ -501,7 +495,6 @@ const CASES: CaseSeed[] = [
       {
         id: "paleto_notes",
         kind: "evidence",
-        eventId: "paleto_ev4",
         x: 800,
         y: 480,
         payload: {
@@ -522,7 +515,6 @@ const CASES: CaseSeed[] = [
       {
         id: "paleto_van",
         kind: "evidence",
-        eventId: "paleto_ev3",
         x: 420,
         y: 470,
         payload: {
@@ -680,7 +672,6 @@ const CASES: CaseSeed[] = [
       {
         id: "grape_paint",
         kind: "evidence",
-        eventId: "grape_ev3",
         x: 760,
         y: 60,
         payload: {
@@ -701,7 +692,6 @@ const CASES: CaseSeed[] = [
       {
         id: "grape_still",
         kind: "evidence",
-        eventId: "grape_ev4",
         x: 760,
         y: 300,
         payload: {
@@ -722,7 +712,6 @@ const CASES: CaseSeed[] = [
       {
         id: "grape_bike",
         kind: "evidence",
-        eventId: "grape_ev3",
         x: 760,
         y: 530,
         payload: {
@@ -889,7 +878,6 @@ const CASES: CaseSeed[] = [
       {
         id: "cassidy_gun",
         kind: "evidence",
-        eventId: "cassidy_ev3",
         x: 760,
         y: 60,
         payload: {
@@ -910,7 +898,6 @@ const CASES: CaseSeed[] = [
       {
         id: "cassidy_boot",
         kind: "evidence",
-        eventId: "cassidy_ev3",
         x: 760,
         y: 300,
         payload: {
@@ -931,7 +918,6 @@ const CASES: CaseSeed[] = [
       {
         id: "cassidy_statement",
         kind: "evidence",
-        eventId: "cassidy_ev2",
         x: 760,
         y: 530,
         payload: {
@@ -997,17 +983,106 @@ const CASES: CaseSeed[] = [
   },
 ];
 
-export function backfillEvidenceEvents(database: DatabaseSync) {
-  const update = database.prepare(
-    `UPDATE nodes SET event_id = ?
-     WHERE id = ? AND kind = 'evidence' AND event_id IS NULL
-       AND EXISTS (SELECT 1 FROM events WHERE id = ?)`,
+const EVENT_LINKS: Record<string, EventLinkSeed[]> = {
+  case_sandy: [
+    { id: "sandy_el1", event: "sandy_ev1", node: "sandy_dusty", label: "Suspect In" },
+    { id: "sandy_el2", event: "sandy_ev1", node: "sandy_unknown", label: "Suspect In" },
+    { id: "sandy_el3", event: "sandy_ev1", node: "sandy_dvr", label: "Recorded" },
+    { id: "sandy_el4", event: "sandy_ev1", node: "sandy_truck", label: "Described Vehicle" },
+    { id: "sandy_el5", event: "sandy_ev2", node: "sandy_dusty", label: "Fled Scene" },
+    { id: "sandy_el6", event: "sandy_ev2", node: "sandy_unknown", label: "Fled Scene" },
+    { id: "sandy_el7", event: "sandy_ev2", node: "sandy_dvr", label: "On Scene" },
+    { id: "sandy_el8", event: "sandy_ev2", node: "sandy_truck", label: "Fled In" },
+    { id: "sandy_el9", event: "sandy_ev3", node: "sandy_dusty", label: "Described" },
+    { id: "sandy_el10", event: "sandy_ev3", node: "sandy_unknown", label: "Described" },
+    { id: "sandy_el11", event: "sandy_ev3", node: "sandy_dvr", label: "Corroborates" },
+    { id: "sandy_el12", event: "sandy_ev3", node: "sandy_truck", label: "Fled In" },
+    { id: "sandy_el13", event: "sandy_ev4", node: "sandy_dusty", label: "Fingerprints Matched" },
+    { id: "sandy_el14", event: "sandy_ev4", node: "sandy_unknown", label: "Associated With" },
+    { id: "sandy_el15", event: "sandy_ev4", node: "sandy_mask", label: "Recovered At" },
+    { id: "sandy_el16", event: "sandy_ev5", node: "sandy_dusty", label: "Registered Owner" },
+    { id: "sandy_el17", event: "sandy_ev5", node: "sandy_unknown", label: "Fled In" },
+    { id: "sandy_el18", event: "sandy_ev5", node: "sandy_truck", label: "Getaway Vehicle" },
+    { id: "sandy_el19", event: "sandy_ev5", node: "sandy_dvr", label: "Plate Partial" },
+    { id: "sandy_el20", event: "sandy_ev6", node: "sandy_dusty", label: "Latent Candidate" },
+    { id: "sandy_el21", event: "sandy_ev6", node: "sandy_mask", label: "Fingerprints Matched" },
+    { id: "sandy_el22", event: "sandy_ev6", node: "sandy_gun", label: "Possessed" },
+    { id: "sandy_el23", event: "sandy_ev6", node: "sandy_truck", label: "Associated With" },
+  ],
+  case_paleto: [
+    { id: "paleto_el1", event: "paleto_ev1", node: "paleto_velez", label: "Driver" },
+    { id: "paleto_el2", event: "paleto_ev1", node: "paleto_van", label: "Stopped" },
+    { id: "paleto_el3", event: "paleto_ev1", node: "paleto_phone", label: "In Vehicle" },
+    { id: "paleto_el4", event: "paleto_ev2", node: "paleto_velez", label: "Consented" },
+    { id: "paleto_el5", event: "paleto_ev2", node: "paleto_bricks", label: "Recovered At" },
+    { id: "paleto_el6", event: "paleto_ev2", node: "paleto_phone", label: "Recovered At" },
+    { id: "paleto_el7", event: "paleto_ev2", node: "paleto_notes", label: "Recovered At" },
+    { id: "paleto_el8", event: "paleto_ev2", node: "paleto_van", label: "Searched" },
+    { id: "paleto_el9", event: "paleto_ev3", node: "paleto_velez", label: "Arrested" },
+    { id: "paleto_el10", event: "paleto_ev3", node: "paleto_van", label: "Towed" },
+    { id: "paleto_el11", event: "paleto_ev3", node: "paleto_bricks", label: "Booked" },
+    { id: "paleto_el12", event: "paleto_ev4", node: "paleto_velez", label: "Possessed" },
+    { id: "paleto_el13", event: "paleto_ev4", node: "paleto_chemist", label: "Named In Notes" },
+    { id: "paleto_el14", event: "paleto_ev4", node: "paleto_notes", label: "Reviewed" },
+    { id: "paleto_el15", event: "paleto_ev4", node: "paleto_phone", label: "Reviewed" },
+    { id: "paleto_el16", event: "paleto_ev5", node: "paleto_chemist", label: "Associated With" },
+    { id: "paleto_el17", event: "paleto_ev5", node: "paleto_notes", label: "Led To" },
+    { id: "paleto_el18", event: "paleto_ev5", node: "paleto_van", label: "Associated With" },
+  ],
+  case_grape: [
+    { id: "grape_el1", event: "grape_ev1", node: "grape_driver", label: "Fled Scene" },
+    { id: "grape_el2", event: "grape_ev1", node: "grape_bike", label: "Struck" },
+    { id: "grape_el3", event: "grape_ev1", node: "grape_paint", label: "Left At Scene" },
+    { id: "grape_el4", event: "grape_ev2", node: "grape_driver", label: "Described" },
+    { id: "grape_el5", event: "grape_ev2", node: "grape_bike", label: "Associated With" },
+    { id: "grape_el6", event: "grape_ev2", node: "grape_still", label: "Sought" },
+    { id: "grape_el7", event: "grape_ev3", node: "grape_driver", label: "Suspect In" },
+    { id: "grape_el8", event: "grape_ev3", node: "grape_paint", label: "Recovered At" },
+    { id: "grape_el9", event: "grape_ev3", node: "grape_bike", label: "Recovered At" },
+    { id: "grape_el10", event: "grape_ev4", node: "grape_driver", label: "Captured On" },
+    { id: "grape_el11", event: "grape_ev4", node: "grape_still", label: "Recovered At" },
+    { id: "grape_el12", event: "grape_ev4", node: "grape_paint", label: "Consistent With" },
+  ],
+  case_cassidy: [
+    { id: "cassidy_el1", event: "cassidy_ev1", node: "cassidy_quinn", label: "Fled On Foot" },
+    { id: "cassidy_el2", event: "cassidy_ev1", node: "cassidy_gun", label: "Fatal Weapon" },
+    { id: "cassidy_el3", event: "cassidy_ev1", node: "cassidy_boot", label: "At Scene" },
+    { id: "cassidy_el4", event: "cassidy_ev2", node: "cassidy_quinn", label: "Described" },
+    { id: "cassidy_el5", event: "cassidy_ev2", node: "cassidy_statement", label: "Witnessed" },
+    { id: "cassidy_el6", event: "cassidy_ev2", node: "cassidy_gun", label: "Associated With" },
+    { id: "cassidy_el7", event: "cassidy_ev3", node: "cassidy_quinn", label: "Suspect In" },
+    { id: "cassidy_el8", event: "cassidy_ev3", node: "cassidy_boot", label: "Recovered At" },
+    { id: "cassidy_el9", event: "cassidy_ev3", node: "cassidy_gun", label: "Recovered At" },
+    { id: "cassidy_el10", event: "cassidy_ev4", node: "cassidy_quinn", label: "Fingerprints Matched" },
+    { id: "cassidy_el11", event: "cassidy_ev4", node: "cassidy_boot", label: "Matched" },
+    { id: "cassidy_el12", event: "cassidy_ev4", node: "cassidy_statement", label: "Corroborates" },
+    { id: "cassidy_el13", event: "cassidy_ev5", node: "cassidy_quinn", label: "Arrested" },
+    { id: "cassidy_el14", event: "cassidy_ev5", node: "cassidy_gun", label: "Possessed" },
+    { id: "cassidy_el15", event: "cassidy_ev5", node: "cassidy_boot", label: "Recovered At" },
+    { id: "cassidy_el16", event: "cassidy_ev5", node: "cassidy_statement", label: "Witnessed" },
+  ],
+};
+
+export function backfillEventLinks(database: DatabaseSync) {
+  const flagged = database.prepare("SELECT value FROM settings WHERE key = ?").get("event_links_v1");
+  if (flagged) return;
+  const caseExists = database.prepare("SELECT 1 AS ok FROM cases WHERE id = ?");
+  const linkCount = database.prepare("SELECT COUNT(*) AS n FROM event_links WHERE case_id = ?");
+  const eventExists = database.prepare("SELECT 1 AS ok FROM events WHERE id = ? AND case_id = ?");
+  const nodeExists = database.prepare("SELECT 1 AS ok FROM nodes WHERE id = ? AND case_id = ?");
+  const insert = database.prepare(
+    "INSERT OR IGNORE INTO event_links (id, case_id, event_id, node_id, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
   );
   for (const item of CASES) {
-    for (const node of item.nodes) {
-      if (node.kind === "evidence" && node.eventId) update.run(node.eventId, node.id, node.eventId);
+    if (!caseExists.get(item.id)) continue;
+    const count = linkCount.get(item.id) as { n: number };
+    if (Number(count.n) > 0) continue;
+    for (const link of EVENT_LINKS[item.id] ?? []) {
+      if (!eventExists.get(link.event, item.id) || !nodeExists.get(link.node, item.id)) continue;
+      insert.run(link.id, item.id, link.event, link.node, link.label, item.updatedAt);
     }
   }
+  database.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("event_links_v1", "1");
 }
 
 function insertClosure(
@@ -1060,7 +1135,7 @@ export function seedPortal(database: DatabaseSync) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertNode = database.prepare(
-    `INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, event_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertEdge = database.prepare(
     `INSERT INTO edges (id, case_id, source_id, target_id, source_handle, target_handle, label, created_at)
@@ -1068,6 +1143,9 @@ export function seedPortal(database: DatabaseSync) {
   );
   const insertPhoto = database.prepare(
     `INSERT INTO photos (id, node_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertEventLink = database.prepare(
+    `INSERT INTO event_links (id, case_id, event_id, node_id, label, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
   );
 
   const uploads = uploadDir();
@@ -1122,7 +1200,6 @@ export function seedPortal(database: DatabaseSync) {
         node.x,
         node.y,
         JSON.stringify(node.payload),
-        node.kind === "evidence" ? node.eventId ?? null : null,
         item.createdAt,
         item.updatedAt,
       );
@@ -1146,6 +1223,9 @@ export function seedPortal(database: DatabaseSync) {
     }
     if (item.closure && item.closedAt) {
       insertClosure(database, item.id, item.closure, item.closedAt, item.closedBy ?? item.createdBy);
+    }
+    for (const link of EVENT_LINKS[item.id] ?? []) {
+      insertEventLink.run(link.id, item.id, link.event, link.node, link.label, item.updatedAt);
     }
   }
 }

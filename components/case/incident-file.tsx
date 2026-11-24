@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { CaseClosurePanel } from "@/components/case/case-closure-panel";
@@ -19,10 +19,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { EVENT_TYPES, INCIDENT_TYPES, RESPONDER_ROLES } from "@/lib/constants";
 import { api, ApiError } from "@/lib/client";
-import { formatWhen, toDatetimeLocal } from "@/lib/format";
+import { formatWhen, fromDatetimeLocal, toDatetimeLocal } from "@/lib/format";
 import { can } from "@/lib/permissions";
-import { cn } from "@/lib/utils";
 import type { CaseDetail, CaseEvent, Responder } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 function blankResponder(): Responder {
   return { id: "", badge: "", callsign: "", name: "", role: "Primary" };
@@ -31,20 +31,14 @@ function blankResponder(): Responder {
 export function IncidentFile({
   record,
   onRecord,
-  activeEventId,
-  expandedEventIds,
-  expandAllEvidence,
-  evidenceCounts,
-  onRevealEvent,
+  selectedEventId,
+  onSelectEvent,
   onEditClosure,
 }: {
   record: CaseDetail;
   onRecord: (record: CaseDetail) => void;
-  activeEventId: string | null;
-  expandedEventIds: string[];
-  expandAllEvidence: boolean;
-  evidenceCounts: Record<string, number>;
-  onRevealEvent: (eventId: string) => void;
+  selectedEventId: string | null;
+  onSelectEvent: (id: string) => void;
   onEditClosure: () => void;
 }) {
   const { role, badge } = useSession();
@@ -57,10 +51,6 @@ export function IncidentFile({
 
   const [narrative, setNarrative] = useState(record.narrative);
   const [narrativeState, setNarrativeState] = useState<"saved" | "saving" | "unsaved">("saved");
-  const narrativeDirty = useRef(false);
-  const narrativeRef = useRef(narrative);
-  narrativeRef.current = narrative;
-  const rosterCase = useRef(record.id);
   const [responders, setResponders] = useState<Responder[]>(record.responders);
   const [rosterDirty, setRosterDirty] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -80,47 +70,32 @@ export function IncidentFile({
   });
 
   useEffect(() => {
-    if (rosterCase.current !== record.id) {
-      rosterCase.current = record.id;
-      setRosterDirty(false);
-      setResponders(record.responders);
-      return;
-    }
     if (!rosterDirty) setResponders(record.responders);
-  }, [record.id, record.responders, rosterDirty]);
+  }, [record.responders, rosterDirty]);
 
   useEffect(() => {
-    if (narrativeDirty.current && canEdit) return;
+    if (narrativeState === "unsaved" || narrativeState === "saving") return;
     setNarrative(record.narrative);
-    if (!narrativeDirty.current) setNarrativeState("saved");
-  }, [record.id, record.narrative, canEdit]);
+  }, [record.narrative, narrativeState]);
 
   useEffect(() => {
-    if (!canEdit || !narrativeDirty.current) return;
-    if (narrative === record.narrative) {
-      narrativeDirty.current = false;
-      setNarrativeState("saved");
-      return;
-    }
-    setNarrativeState("unsaved");
-    const snapshot = narrative;
+    if (!canEdit || narrativeState !== "unsaved") return;
     const timer = window.setTimeout(async () => {
       setNarrativeState("saving");
       try {
         const updated = await api<CaseDetail>(`/api/cases/${record.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ narrative: snapshot }),
+          body: JSON.stringify({ narrative }),
         });
-        if (narrativeRef.current === snapshot) narrativeDirty.current = false;
         onRecord(updated);
-        setNarrativeState(narrativeRef.current === snapshot ? "saved" : "unsaved");
+        setNarrativeState("saved");
       } catch (error) {
         setNarrativeState("unsaved");
         toast.error(error instanceof ApiError ? error.message : "The narrative was not saved.");
       }
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [narrative, canEdit, record.id, record.narrative, onRecord]);
+  }, [narrative, narrativeState, canEdit, record.id, onRecord]);
 
   async function saveDetails() {
     const type = incidentType === "Other" ? customType.trim() : incidentType;
@@ -130,7 +105,7 @@ export function IncidentFile({
         body: JSON.stringify({
           incidentType: type,
           location,
-          occurredAt: new Date(occurredAt).toISOString(),
+          occurredAt: fromDatetimeLocal(occurredAt),
         }),
       });
       onRecord(updated);
@@ -142,8 +117,8 @@ export function IncidentFile({
   }
 
   async function saveRoster() {
-    const filled = responders.filter((row) => row.badge || row.callsign || row.name);
-    if (filled.some((row) => !row.badge || !row.callsign || !row.name || !row.role)) {
+    const filled = responders.filter((row) => row.badge || row.name);
+    if (filled.some((row) => !row.badge || !row.name || !row.role)) {
       toast.error("Complete every responder row, or clear it.");
       return;
     }
@@ -163,7 +138,7 @@ export function IncidentFile({
 
   async function saveEvent(existing?: CaseEvent) {
     const payload = {
-      occurredAt: new Date(draft.occurredAt).toISOString(),
+      occurredAt: fromDatetimeLocal(draft.occurredAt),
       badge: draft.badge,
       unit: draft.unit,
       title: draft.title,
@@ -220,10 +195,14 @@ export function IncidentFile({
   const knownType = INCIDENT_TYPES.includes(record.incidentType as (typeof INCIDENT_TYPES)[number]);
 
   return (
-    <div className="h-full overflow-y-auto bg-[#0c1118]">
-      <div className="space-y-8 px-4 py-5 sm:px-6">
-        {record.status === "closed" ? <CaseClosurePanel record={record} onEdit={onEditClosure} /> : null}
-        <section>
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto bg-[#0c1118] p-3 sm:p-4">
+      {record.status === "closed" ? (
+        <div className="shrink-0">
+          <CaseClosurePanel record={record} onEdit={onEditClosure} />
+        </div>
+      ) : null}
+      <section className="flex min-h-[200px] flex-1 flex-col rounded-lg border border-white/10 bg-ink/80">
+        <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">Incident narrative</h2>
             {canEdit ? (
@@ -237,10 +216,10 @@ export function IncidentFile({
             value={narrative}
             readOnly={!canEdit}
             onChange={(event) => {
-              narrativeDirty.current = true;
               setNarrative(event.target.value);
+              setNarrativeState("unsaved");
             }}
-            className="min-h-48 leading-7"
+            className="min-h-0 flex-1 resize-none leading-7"
           />
           {!canEdit ? (
             <p className="mt-2 text-xs text-fog">
@@ -265,11 +244,14 @@ export function IncidentFile({
               Edit case details
             </Button>
           ) : null}
-        </section>
+        </div>
+      </section>
 
+      <section className="flex min-h-[240px] flex-[1.15] flex-col overflow-hidden rounded-lg border border-white/10 bg-ink/80">
+        <div className="min-h-0 flex-1 space-y-8 overflow-y-auto px-4 py-4">
         <section>
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">Initial response</h2>
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">Initial response units</h2>
             {canEdit ? (
               <Button type="button" variant="ghost" size="sm" onClick={() => { setResponders((rows) => [...rows, blankResponder()]); setRosterDirty(true); }}>
                 <Plus /> Add
@@ -277,11 +259,10 @@ export function IncidentFile({
             ) : null}
           </div>
           <div className="overflow-x-auto rounded-md border border-white/8">
-            <table className="w-full min-w-[520px] text-left text-sm">
+            <table className="w-full min-w-[420px] text-left text-sm">
               <thead className="bg-white/[0.03] text-[10px] uppercase tracking-[0.14em] text-fog">
                 <tr>
                   <th className="px-3 py-2 font-medium">Badge</th>
-                  <th className="px-3 py-2 font-medium">Callsign</th>
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Role</th>
                   {canEdit ? <th className="px-3 py-2" /> : null}
@@ -290,12 +271,12 @@ export function IncidentFile({
               <tbody>
                 {responders.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-3 py-4 text-fog">No units recorded.</td>
+                    <td colSpan={4} className="px-3 py-4 text-fog">No units recorded.</td>
                   </tr>
                 ) : null}
                 {responders.map((row, index) => (
                   <tr key={row.id || index} className="border-t border-white/6">
-                    {(["badge", "callsign", "name"] as const).map((field) => (
+                    {(["badge", "name"] as const).map((field) => (
                       <td key={field} className="px-2 py-2">
                         {canEdit ? (
                           <Input
@@ -365,7 +346,7 @@ export function IncidentFile({
         </section>
 
         <section>
-          <div className="mb-1 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between">
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">Chronological events</h2>
             {canAddEvent ? (
               <Button
@@ -382,28 +363,17 @@ export function IncidentFile({
               </Button>
             ) : null}
           </div>
-          <p className="mb-3 text-xs text-fog">Select an event to reveal its evidence on the chart.</p>
           {adding ? <EventForm draft={draft} setDraft={setDraft} onCancel={() => setAdding(false)} onSave={() => void saveEvent()} /> : null}
           <ol className="mt-4 space-y-0 border-l border-gold/30 pl-4">
             {record.events.length === 0 ? <li className="text-sm text-fog">No events logged.</li> : null}
-            {record.events.map((event) => {
-              const open = expandAllEvidence || expandedEventIds.includes(event.id);
-              const active = activeEventId === event.id;
-              const count = evidenceCounts[event.id] ?? 0;
-              return (
+            {record.events.map((event) => (
               <li key={event.id} className="relative pb-5">
-                <span className={cn("absolute -left-[21px] top-1.5 h-2 w-2 rounded-full", active || open ? "bg-gold-bright" : "bg-gold")} />
+                <span className={cn("absolute -left-[21px] top-1.5 h-2 w-2 rounded-full", selectedEventId === event.id ? "bg-gold shadow-[0_0_8px_rgba(212,175,55,0.8)]" : "bg-gold/70")} />
                 {editingId === event.id ? (
                   <EventForm draft={draft} setDraft={setDraft} onCancel={() => setEditingId(null)} onSave={() => void saveEvent(event)} />
                 ) : (
-                  <div className={cn("rounded-md px-2 py-1.5 transition-colors", open && "bg-gold/[0.06]", active && "ring-1 ring-gold/40")}>
-                    <button
-                      type="button"
-                      className="w-full text-left"
-                      aria-pressed={open}
-                      aria-label={`Reveal evidence for ${event.title}`}
-                      onClick={() => onRevealEvent(event.id)}
-                    >
+                  <div className={cn("rounded-md px-2 py-1.5", selectedEventId === event.id ? "bg-gold/10 ring-1 ring-gold/55" : "hover:bg-white/[0.03]")}>
+                    <button type="button" className="w-full text-left" onClick={() => onSelectEvent(event.id)}>
                       <div className="flex flex-wrap items-baseline justify-between gap-2">
                         <div className="font-mono text-[11px] text-gold-bright">{formatWhen(event.occurredAt)}</div>
                         <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-fog">
@@ -411,8 +381,8 @@ export function IncidentFile({
                         </div>
                       </div>
                       <h3 className="mt-1 text-sm font-medium">{event.title}</h3>
-                      {count > 0 ? (
-                        <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-gold">{count} evidence</div>
+                      {event.findings ? (
+                        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-fog">Description</p>
                       ) : null}
                       <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/85">{event.findings}</p>
                     </button>
@@ -433,8 +403,7 @@ export function IncidentFile({
                   </div>
                 )}
               </li>
-              );
-            })}
+            ))}
           </ol>
         </section>
 
@@ -447,7 +416,8 @@ export function IncidentFile({
             <Trash2 /> Delete case
           </Button>
         ) : null}
-      </div>
+        </div>
+      </section>
 
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DialogContent>
@@ -478,7 +448,7 @@ export function IncidentFile({
               <Input id="detail-location" value={location} onChange={(event) => setLocation(event.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="detail-time">Date and time</Label>
+              <Label htmlFor="detail-time">Date and time (EST)</Label>
               <Input id="detail-time" type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} />
             </div>
           </div>
@@ -506,7 +476,7 @@ function EventForm({
   return (
     <div className="mb-4 space-y-2 rounded-md border border-white/10 bg-ink p-3">
       <div className="grid gap-2 sm:grid-cols-2">
-        <Input aria-label="Event time" type="datetime-local" value={draft.occurredAt} onChange={(event) => setDraft({ ...draft, occurredAt: event.target.value })} />
+        <Input aria-label="Event time (EST)" type="datetime-local" value={draft.occurredAt} onChange={(event) => setDraft({ ...draft, occurredAt: event.target.value })} />
         <Select value={draft.eventType} onValueChange={(eventType) => setDraft({ ...draft, eventType })}>
           <SelectTrigger aria-label="Event type"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -519,7 +489,10 @@ function EventForm({
         <Input aria-label="Unit" className="font-mono" placeholder="Unit" value={draft.unit} onChange={(event) => setDraft({ ...draft, unit: event.target.value })} />
       </div>
       <Input aria-label="Event title" placeholder="Event title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
-      <Textarea aria-label="Findings" placeholder="What was found or done" value={draft.findings} onChange={(event) => setDraft({ ...draft, findings: event.target.value })} />
+      <div className="space-y-2">
+        <Label htmlFor="event-description">Description</Label>
+        <Textarea id="event-description" aria-label="Description" placeholder="What happened" value={draft.findings} onChange={(event) => setDraft({ ...draft, findings: event.target.value })} />
+      </div>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
         <Button type="button" size="sm" onClick={onSave}>Save event</Button>

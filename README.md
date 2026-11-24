@@ -1,6 +1,6 @@
 # BCSO Investigation Portal
 
-Self-hosted case management and link-analysis workspace for the Blaine County Sheriff's Office. Deputies sign in with a badge number and a preset role password, work open and closed case files, and build an evidence and suspect chart for each investigation.
+Self-hosted case management workspace for the Blaine County Sheriff's Office. Deputies sign in with a badge number and a preset role password, work open and closed case files, and lay suspects, events, and evidence out on an investigation board.
 
 The app is a Next.js server with a SQLite database and local photo storage. Nothing leaves the machine it runs on.
 
@@ -63,9 +63,7 @@ The compose file publishes port 4317 and stores the database in the `bcso-data` 
 
 - **Case board.** Open and closed tabs with counts, search, and incident-type filter. New cases take an incident type, location, date and time, narrative, and the initial responding units.
 - **Incident file.** Narrative with a save indicator, the initial-response roster, and a chronological event log.
-- **Link chart.** A case root, suspects, related items, and chronological event nodes. Evidence tied to an event stays collapsed until that event is opened from the chart or the event log. Drag between record nodes to link them, or use Link to node in the inspector. Filter the chart to all links, the evidence tree, or the suspects tree.
-- **Live file.** Signed-in users see case, event, graph, and photo changes without reloading. A LIVE indicator in the workspace header shows the connection. Text you are still typing is left in place.
-- **Delete node.** Removing a chart node asks for confirmation and names the record, its links, and its photos.
+- **Investigation board.** Three columns beside the case file: suspects, chronological events, and evidence. Click an event to reveal the suspects and evidence linked to it. The inspector still edits fields, photos, and suspect-to-evidence links, and can link an item to other events. Open cases refresh live over SSE.
 - **Photos.** Drop or pick JPEG, PNG, WEBP, or GIF files on a node (up to 8 MB each, 12 per node). Open a thumbnail for the full image.
 - **Roles.** Closed cases are locked until an administrator reopens them. Only administration can delete a case or a node, or change role passwords.
 

@@ -22,7 +22,7 @@ const display = Barlow_Condensed({
 
 export const metadata: Metadata = {
   title: "BCSO Investigation Portal",
-  description: "Blaine County Sheriff's Office case management and link analysis.",
+  description: "Blaine County Sheriff's Office case management and investigation board.",
   robots: { index: false, follow: false },
 };
 

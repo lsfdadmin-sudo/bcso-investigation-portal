@@ -5,8 +5,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { arrestReportError, normalizeArrestReport } from "./arrest-report";
 import { EVIDENCE_CATEGORIES, SUSPECT_STATUSES } from "./constants";
 import { getDb, transaction } from "./db";
+import { fromDatetimeLocal } from "./format";
 import { HttpError } from "./http";
-import { emitLive } from "./live";
+import { publishCase } from "./live";
 import { uploadDir } from "./paths";
 import type {
   CaseClosure,
@@ -19,6 +20,7 @@ import type {
   ChargedIndividual,
   EvidenceCategory,
   EvidencePayload,
+  EventLink,
   GraphData,
   GraphEdge,
   GraphNode,
@@ -75,7 +77,9 @@ function optionalText(value: unknown, label: string, max: number) {
 
 function asDate(value: unknown, label: string) {
   const raw = text(value, label, 40);
-  const date = new Date(raw);
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const iso = hasZone ? new Date(raw).toISOString() : fromDatetimeLocal(raw);
+  const date = new Date(iso);
   if (Number.isNaN(date.getTime())) throw new HttpError(`Enter a valid ${label.toLowerCase()}.`, 400);
   return date.toISOString();
 }
@@ -157,6 +161,7 @@ function parsePayload(kind: NodeKind, raw: unknown): CasePayload | SuspectPayloa
       tag: text(value.tag, "Evidence tag", 40),
       category: category as EvidenceCategory,
       description: optionalText(value.description, "Description", 2000),
+      findings: optionalText(value.findings, "Findings", 4000),
       custody: optionalText(value.custody, "Chain of custody", 2000),
       notes: optionalText(value.notes, "Notes", 4000),
     };
@@ -167,6 +172,12 @@ function parsePayload(kind: NodeKind, raw: unknown): CasePayload | SuspectPayloa
     occurredAt: value.occurredAt ? asDate(value.occurredAt, "Date") : "",
     notes: optionalText(value.notes, "Notes", 4000),
   };
+}
+
+function storedFindings(kind: NodeKind, payload: unknown) {
+  if (kind !== "evidence" || !payload || typeof payload !== "object") return null;
+  const value = (payload as { findings?: unknown }).findings;
+  return typeof value === "string" ? value : "";
 }
 
 function nextCaseNumber(database: DatabaseSync) {
@@ -228,6 +239,11 @@ function defaultLinkLabel(kind: NodeKind) {
   if (kind === "suspect") return "Suspect In";
   if (kind === "evidence") return "Recovered At";
   return "Associated With";
+}
+
+function finish<T>(caseId: string, result: T): T {
+  publishCase(caseId);
+  return result;
 }
 
 export function listCases(filters: { status: CaseStatus; q?: string; type?: string }) {
@@ -332,7 +348,7 @@ export function getCaseDetail(id: string): CaseDetail {
   return detailFrom(database, row);
 }
 
-export type ResponderInput = { badge: string; callsign: string; name: string; role: string };
+export type ResponderInput = { badge: string; callsign?: string; name: string; role: string };
 
 export function createCase(input: {
   incidentType: string;
@@ -367,7 +383,7 @@ export function createCase(input: {
         randomUUID(),
         id,
         text(responder.badge, "Badge", 16),
-        text(responder.callsign, "Callsign", 24),
+        optionalText(responder.callsign, "Callsign", 24),
         text(responder.name, "Name", 80),
         text(responder.role, "Role", 40),
         index,
@@ -386,8 +402,7 @@ export function createCase(input: {
       );
     return getCaseDetailFrom(database, id);
   });
-  emitLive({ caseId: created.id, kind: "case", action: "create" });
-  return created;
+  return finish(created.id, created);
 }
 
 function getCaseDetailFrom(database: DatabaseSync, id: string): CaseDetail {
@@ -499,7 +514,6 @@ export function updateCase(
   badge: string,
 ) {
   void badge;
-  const existingStatus = mustCase(id).status;
   const updated = transaction((database) => {
     const existing = mustCase(id, database);
     const dataTouched =
@@ -537,12 +551,7 @@ export function updateCase(
     syncRoot(database, id);
     return getCaseDetailFrom(database, id);
   });
-  emitLive({
-    caseId: id,
-    kind: patch.status && patch.status !== existingStatus ? "status" : "case",
-    action: "update",
-  });
-  return updated;
+  return finish(id, updated);
 }
 
 function requireArrestReport(value: unknown) {
@@ -647,7 +656,7 @@ export function saveCaseClosure(
     });
     return getCaseDetailFrom(database, caseId);
   });
-  emitLive({ caseId, kind: "status", action: "update" });
+  publishCase(caseId);
   return updated;
 }
 
@@ -669,12 +678,12 @@ export function deleteCase(id: string) {
     tx.prepare("DELETE FROM cases WHERE id = ?").run(id);
   });
   for (const file of files) unlinkUpload(file.filename);
-  emitLive({ caseId: id, kind: "case", action: "delete" });
+  publishCase(id);
   return { ok: true };
 }
 
 export function replaceResponders(caseId: string, responders: ResponderInput[]) {
-  const roster = transaction((database) => {
+  const saved = transaction((database) => {
     const existing = mustCase(caseId, database);
     assertMutable(existing);
     if (responders.length > 24) throw new HttpError("A case can list up to 24 responders.", 400);
@@ -687,7 +696,7 @@ export function replaceResponders(caseId: string, responders: ResponderInput[]) 
         randomUUID(),
         caseId,
         text(responder.badge, "Badge", 16),
-        text(responder.callsign, "Callsign", 24),
+        optionalText(responder.callsign, "Callsign", 24),
         text(responder.name, "Name", 80),
         text(responder.role, "Role", 40),
         index,
@@ -696,8 +705,7 @@ export function replaceResponders(caseId: string, responders: ResponderInput[]) 
     touchCase(database, caseId);
     return respondersFor(database, caseId);
   });
-  emitLive({ caseId, kind: "responders", action: "update" });
-  return roster;
+  return finish(caseId, saved);
 }
 
 export function createEvent(
@@ -723,7 +731,7 @@ export function createEvent(
         text(input.unit, "Unit", 24),
         text(input.title, "Title", 120),
         text(input.eventType, "Event type", 40),
-        text(input.findings, "Findings", 8000),
+        text(input.findings, "Description", 8000),
         createdBy,
         stamp,
         stamp,
@@ -731,8 +739,7 @@ export function createEvent(
     touchCase(database, caseId, stamp);
     return eventsFor(database, caseId).find((event) => event.id === id);
   });
-  emitLive({ caseId, kind: "event", action: "create" });
-  return created;
+  return finish(caseId, created);
 }
 
 export function updateEvent(
@@ -757,28 +764,25 @@ export function updateEvent(
         text(input.unit, "Unit", 24),
         text(input.title, "Title", 120),
         text(input.eventType, "Event type", 40),
-        text(input.findings, "Findings", 8000),
+        text(input.findings, "Description", 8000),
         stamp,
         eventId,
       );
     touchCase(database, caseId, stamp);
     return eventsFor(database, caseId).find((event) => event.id === eventId);
   });
-  emitLive({ caseId, kind: "event", action: "update" });
-  return updated;
+  return finish(caseId, updated);
 }
 
 export function deleteEvent(caseId: string, eventId: string) {
   const removed = transaction((database) => {
     assertMutable(mustCase(caseId, database));
-    database.prepare("UPDATE nodes SET event_id = NULL WHERE event_id = ? AND case_id = ?").run(eventId, caseId);
     const result = database.prepare("DELETE FROM events WHERE id = ? AND case_id = ?").run(eventId, caseId);
     if (!result.changes) throw new HttpError("Event not found.", 404);
     touchCase(database, caseId);
     return { ok: true };
   });
-  emitLive({ caseId, kind: "event", action: "delete" });
-  return removed;
+  return finish(caseId, removed);
 }
 
 type NodeRow = {
@@ -788,7 +792,7 @@ type NodeRow = {
   pos_x: number;
   pos_y: number;
   payload: string;
-  event_id: string | null;
+  findings: string | null;
   updated_at: string;
 };
 
@@ -813,22 +817,20 @@ function mapPhoto(row: PhotoRow): Photo {
 }
 
 function mapNode(row: NodeRow, photos: Photo[]): GraphNode {
-  const payload = parsePayload(row.kind, JSON.parse(row.payload));
+  const raw = asRecord(JSON.parse(row.payload));
+  if (row.kind === "evidence" && row.findings && !String(raw.findings ?? "").trim()) raw.findings = row.findings;
+  const payload = parsePayload(row.kind, raw);
   const base = { id: row.id, x: row.pos_x, y: row.pos_y, photos, updatedAt: row.updated_at };
   if (row.kind === "case") return { ...base, kind: "case", payload: payload as CasePayload };
   if (row.kind === "suspect") return { ...base, kind: "suspect", payload: payload as SuspectPayload };
-  if (row.kind === "evidence") {
-    return { ...base, kind: "evidence", eventId: row.event_id, payload: payload as EvidencePayload };
-  }
+  if (row.kind === "evidence") return { ...base, kind: "evidence", payload: payload as EvidencePayload };
   return { ...base, kind: "related", payload: payload as RelatedPayload };
 }
 
 function graphFrom(database: DatabaseSync, caseId: string): GraphData {
   mustCase(caseId, database);
   const nodes = database
-    .prepare(
-      "SELECT id, case_id, kind, pos_x, pos_y, payload, event_id, updated_at FROM nodes WHERE case_id = ? ORDER BY created_at ASC",
-    )
+    .prepare("SELECT id, case_id, kind, pos_x, pos_y, payload, findings, updated_at FROM nodes WHERE case_id = ? ORDER BY created_at ASC")
     .all(caseId) as NodeRow[];
   const photos = database
     .prepare(
@@ -869,6 +871,18 @@ function graphFrom(database: DatabaseSync, caseId: string): GraphData {
         label: edge.label,
       }),
     ),
+    eventLinks: (
+      database
+        .prepare("SELECT id, event_id, node_id, label FROM event_links WHERE case_id = ? ORDER BY created_at ASC")
+        .all(caseId) as { id: string; event_id: string; node_id: string; label: string }[]
+    ).map(
+      (link): EventLink => ({
+        id: link.id,
+        eventId: link.event_id,
+        nodeId: link.node_id,
+        label: link.label,
+      }),
+    ),
   };
 }
 
@@ -878,17 +892,25 @@ export function getGraph(caseId: string): GraphData {
 
 function mustNode(database: DatabaseSync, nodeId: string) {
   const row = database
-    .prepare("SELECT id, case_id, kind, pos_x, pos_y, payload, event_id, updated_at FROM nodes WHERE id = ?")
+    .prepare("SELECT id, case_id, kind, pos_x, pos_y, payload, findings, updated_at FROM nodes WHERE id = ?")
     .get(nodeId) as NodeRow | undefined;
   if (!row) throw new HttpError("Node not found.", 404);
   return row;
 }
 
-function evidenceEventId(database: DatabaseSync, caseId: string, eventId: string | null | undefined) {
-  if (!eventId) return null;
-  const match = database.prepare("SELECT id FROM events WHERE id = ? AND case_id = ?").get(eventId, caseId);
-  if (!match) throw new HttpError("That event is not on this case.", 400);
-  return eventId;
+function attachEventLink(database: DatabaseSync, caseId: string, eventId: string, nodeId: string, label: string | null) {
+  const event = database.prepare("SELECT id FROM events WHERE id = ? AND case_id = ?").get(eventId, caseId);
+  if (!event) throw new HttpError("Event not found.", 404);
+  const node = mustNode(database, nodeId);
+  if (node.case_id !== caseId) throw new HttpError("Link the item inside this case.", 400);
+  if (node.kind === "case") throw new HttpError("The case root is not linked as an event item.", 400);
+  const duplicate = database.prepare("SELECT id FROM event_links WHERE event_id = ? AND node_id = ?").get(eventId, nodeId);
+  if (duplicate) throw new HttpError("That item is already linked to this event.", 409);
+  const clean = text(label?.trim() || defaultLinkLabel(node.kind), "Relationship", 80);
+  const id = randomUUID();
+  database
+    .prepare("INSERT INTO event_links (id, case_id, event_id, node_id, label, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(id, caseId, eventId, nodeId, clean, nowIso());
 }
 
 export function createNode(
@@ -909,14 +931,13 @@ export function createNode(
     if (input.kind === "suspect" && !raw.status) raw.status = "person_of_interest";
     if (input.kind === "evidence" && !raw.category) raw.category = "other";
     const payload = parsePayload(input.kind, raw);
-    const eventId = input.kind === "evidence" ? evidenceEventId(database, caseId, input.eventId) : null;
     const id = randomUUID();
     const stamp = nowIso();
     database
       .prepare(
-        "INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, event_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, findings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(id, caseId, input.kind, position.x, position.y, JSON.stringify(payload), eventId, stamp, stamp);
+      .run(id, caseId, input.kind, position.x, position.y, JSON.stringify(payload), storedFindings(input.kind, payload), stamp, stamp);
 
     const anchorId = input.linkTo?.trim() || rootId(database, caseId);
     const anchor = mustNode(database, anchorId);
@@ -928,18 +949,18 @@ export function createNode(
          VALUES (?, ?, ?, ?, 'b', 't', ?, ?)`,
       )
       .run(randomUUID(), caseId, anchor.id, id, label, stamp);
+    if (input.eventId?.trim()) attachEventLink(database, caseId, input.eventId.trim(), id, null);
     touchCase(database, caseId, stamp);
     return graphFrom(database, caseId);
   });
-  emitLive({ caseId, kind: "node", action: "create" });
-  return graph;
+  return finish(caseId, graph);
 }
 
-export function updateNode(nodeId: string, patch: { payload?: unknown; x?: number; y?: number; eventId?: string | null }) {
-  const rowBefore = mustNode(getDb(), nodeId);
-  const movedOnly = patch.payload === undefined && patch.eventId === undefined;
-  const updated = transaction((database) => {
+export function updateNode(nodeId: string, patch: { payload?: unknown; x?: number; y?: number }) {
+  let caseId = "";
+  const result = transaction((database) => {
     const row = mustNode(database, nodeId);
+    caseId = row.case_id;
     assertMutable(mustCase(row.case_id, database));
     let payload = JSON.parse(row.payload) as unknown;
     if (patch.payload !== undefined) {
@@ -950,26 +971,23 @@ export function updateNode(nodeId: string, patch: { payload?: unknown; x?: numbe
     const y = patch.y === undefined ? row.pos_y : Number(patch.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new HttpError("Position is invalid.", 400);
     const stamp = nowIso();
-    if (patch.eventId !== undefined) {
-      if (row.kind !== "evidence") throw new HttpError("Only evidence can be tied to an event.", 400);
-      const eventId = evidenceEventId(database, row.case_id, patch.eventId);
-      database
-        .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, event_id = ?, updated_at = ? WHERE id = ?")
-        .run(JSON.stringify(payload), x, y, eventId, stamp, nodeId);
-    } else {
-      database
-        .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, updated_at = ? WHERE id = ?")
-        .run(JSON.stringify(payload), x, y, stamp, nodeId);
-    }
+    const findings =
+      patch.payload === undefined && row.kind === "evidence"
+        ? typeof asRecord(payload).findings === "string"
+          ? String(asRecord(payload).findings)
+          : row.findings
+        : storedFindings(row.kind, payload);
+    database
+      .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, findings = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(payload), x, y, findings, stamp, nodeId);
     touchCase(database, row.case_id, stamp);
     return { ok: true };
   });
-  emitLive({ caseId: rowBefore.case_id, kind: movedOnly ? "positions" : "node", action: "update" });
-  return updated;
+  return finish(caseId, result);
 }
 
 export function savePositions(caseId: string, positions: { id: string; x: number; y: number }[]) {
-  const saved = transaction((database) => {
+  const result = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const stamp = nowIso();
     const update = database.prepare(
@@ -985,8 +1003,7 @@ export function savePositions(caseId: string, positions: { id: string; x: number
     touchCase(database, caseId, stamp);
     return { ok: true };
   });
-  emitLive({ caseId, kind: "positions", action: "update" });
-  return saved;
+  return finish(caseId, result);
 }
 
 function resolvedUpload(filename: string) {
@@ -1013,7 +1030,7 @@ export function deleteNode(nodeId: string) {
     touchCase(tx, row.case_id);
   });
   for (const photo of photos) unlinkUpload(photo.filename);
-  emitLive({ caseId: row.case_id, kind: "node", action: "delete" });
+  publishCase(row.case_id);
   return { ok: true };
 }
 
@@ -1060,8 +1077,7 @@ export function createEdge(
       label,
     } satisfies GraphEdge;
   });
-  emitLive({ caseId, kind: "edge", action: "create" });
-  return edge;
+  return finish(caseId, edge);
 }
 
 export function updateEdge(caseId: string, edgeId: string, label: string) {
@@ -1075,8 +1091,7 @@ export function updateEdge(caseId: string, edgeId: string, label: string) {
     touchCase(database, caseId);
     return { id: edgeId, label: clean };
   });
-  emitLive({ caseId, kind: "edge", action: "update" });
-  return updated;
+  return finish(caseId, updated);
 }
 
 export function deleteEdge(caseId: string, edgeId: string) {
@@ -1087,8 +1102,7 @@ export function deleteEdge(caseId: string, edgeId: string) {
     touchCase(database, caseId);
     return { ok: true };
   });
-  emitLive({ caseId, kind: "edge", action: "delete" });
-  return removed;
+  return finish(caseId, removed);
 }
 
 const ALLOWED_MIME = new Map<string, string>([
@@ -1155,7 +1169,6 @@ export async function addPhotos(nodeId: string, files: File[]) {
       tx.prepare("UPDATE nodes SET updated_at = ? WHERE id = ?").run(stamp, nodeId);
       touchCase(tx, node.case_id, stamp);
     });
-    emitLive({ caseId: node.case_id, kind: "photo", action: "create" });
   } catch (error) {
     for (const photo of stored) unlinkUpload(photo.filename);
     throw error;
@@ -1166,6 +1179,7 @@ export async function addPhotos(nodeId: string, files: File[]) {
       "SELECT id, node_id, filename, original_name, mime, size, created_at FROM photos WHERE node_id = ? ORDER BY created_at ASC",
     )
     .all(nodeId) as PhotoRow[];
+  publishCase(node.case_id);
   return { photos: photos.map(mapPhoto) };
 }
 
@@ -1195,8 +1209,29 @@ export function deletePhoto(photoId: string) {
     touchCase(tx, row.case_id);
   });
   unlinkUpload(row.filename);
-  emitLive({ caseId: row.case_id, kind: "photo", action: "delete" });
+  publishCase(row.case_id);
   return { ok: true };
+}
+
+export function createEventLink(caseId: string, input: { eventId: string; nodeId: string; label?: string | null }) {
+  const graph = transaction((database) => {
+    assertMutable(mustCase(caseId, database));
+    attachEventLink(database, caseId, text(input.eventId, "Event", 80), text(input.nodeId, "Item", 80), input.label ?? null);
+    touchCase(database, caseId);
+    return graphFrom(database, caseId);
+  });
+  return finish(caseId, graph);
+}
+
+export function deleteEventLink(caseId: string, linkId: string) {
+  const graph = transaction((database) => {
+    assertMutable(mustCase(caseId, database));
+    const removed = database.prepare("DELETE FROM event_links WHERE id = ? AND case_id = ?").run(linkId, caseId);
+    if (!removed.changes) throw new HttpError("That event link was not found.", 404);
+    touchCase(database, caseId);
+    return graphFrom(database, caseId);
+  });
+  return finish(caseId, graph);
 }
 
 export function nodeCase(nodeId: string) {
