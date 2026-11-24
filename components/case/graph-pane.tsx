@@ -20,6 +20,7 @@ import { ChevronsDownUp, ChevronsUpDown, LayoutGrid, LocateFixed, Plus, Trash2 }
 import { toast } from "sonner";
 import { DeleteNodeDialog } from "@/components/case/delete-node-dialog";
 import { EvidenceDialog } from "@/components/case/evidence-dialog";
+import { SuspectDialog } from "@/components/case/suspect-dialog";
 import { GraphPerms, nodeTypes, type FlowNode } from "@/components/case/flow-nodes";
 import { Inspector } from "@/components/case/inspector";
 import { buildTree, type TreeMode } from "@/components/case/tree";
@@ -73,6 +74,7 @@ function GraphCanvas({
   const [edgeId, setEdgeId] = useState<string | null>(null);
   const [edgeLabel, setEdgeLabel] = useState("");
   const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [suspectOpen, setSuspectOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [settling, setSettling] = useState(false);
@@ -347,7 +349,7 @@ function GraphCanvas({
             {allEvidenceOpen ? "Collapse evidence" : "Expand all evidence"}
           </Button>
           {canSuspect ? (
-            <Button type="button" size="sm" variant="secondary" onClick={() => void add("suspect")}>
+            <Button type="button" size="sm" variant="secondary" onClick={() => setSuspectOpen(true)}>
               <Plus /> Add suspect
             </Button>
           ) : null}
@@ -477,6 +479,19 @@ function GraphCanvas({
           ) : null}
         </div>
       </div>
+      <SuspectDialog
+        open={suspectOpen}
+        caseId={caseId}
+        onOpenChange={setSuspectOpen}
+        onCreated={(next) => {
+          onGraph(next);
+          const created = next.nodes.find((node) => !graph.nodes.some((existing) => existing.id === node.id));
+          if (created) {
+            setSelectedId(created.id);
+            setEdgeId(null);
+          }
+        }}
+      />
       <EvidenceDialog
         open={evidenceOpen}
         caseId={caseId}

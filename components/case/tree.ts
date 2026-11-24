@@ -72,18 +72,18 @@ export function buildTree(input: {
     const open = revealed(event.id);
     const visibleAttached = open ? attached : [];
     shownEvidence.set(event.id, visibleAttached);
-    const evidenceHeight = stackHeight(visibleAttached.length, 168);
-    const block = Math.max(176, evidenceHeight);
+    const evidenceHeight = stackHeight(visibleAttached.length, 196);
+    const block = Math.max(220, evidenceHeight);
     positions.set(`event:${event.id}`, { x: COL_EVENT, y: eventY });
     visibleAttached.forEach((node, index) => {
-      positions.set(node.id, { x: COL_EVIDENCE, y: eventY + index * (168 + GAP) });
+      positions.set(node.id, { x: COL_EVIDENCE, y: eventY + index * (196 + GAP) });
     });
     eventY += block + GAP;
   }
 
   const looseVisible = showEvents ? loose : [];
   looseVisible.forEach((node, index) => {
-    positions.set(node.id, { x: COL_EVIDENCE, y: eventY + index * (168 + GAP) });
+    positions.set(node.id, { x: COL_EVIDENCE, y: eventY + index * (196 + GAP) });
   });
 
   const visibleIds = new Set(positions.keys());

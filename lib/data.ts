@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { EVIDENCE_CATEGORIES, SUSPECT_STATUSES } from "./constants";
 import { getDb, transaction } from "./db";
+import { fromDatetimeLocal } from "./format";
 import { HttpError } from "./http";
 import { emitLive } from "./live";
 import { uploadDir } from "./paths";
@@ -71,7 +72,9 @@ function optionalText(value: unknown, label: string, max: number) {
 
 function asDate(value: unknown, label: string) {
   const raw = text(value, label, 40);
-  const date = new Date(raw);
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const iso = hasZone ? new Date(raw).toISOString() : fromDatetimeLocal(raw);
+  const date = new Date(iso);
   if (Number.isNaN(date.getTime())) throw new HttpError(`Enter a valid ${label.toLowerCase()}.`, 400);
   return date.toISOString();
 }
@@ -152,6 +155,7 @@ function parsePayload(kind: NodeKind, raw: unknown): CasePayload | SuspectPayloa
       tag: text(value.tag, "Evidence tag", 40),
       category: category as EvidenceCategory,
       description: optionalText(value.description, "Description", 2000),
+      findings: optionalText(value.findings, "Findings", 4000),
       custody: optionalText(value.custody, "Chain of custody", 2000),
       notes: optionalText(value.notes, "Notes", 4000),
     };
@@ -162,6 +166,12 @@ function parsePayload(kind: NodeKind, raw: unknown): CasePayload | SuspectPayloa
     occurredAt: value.occurredAt ? asDate(value.occurredAt, "Date") : "",
     notes: optionalText(value.notes, "Notes", 4000),
   };
+}
+
+function storedFindings(kind: NodeKind, payload: unknown) {
+  if (kind !== "evidence" || !payload || typeof payload !== "object") return null;
+  const value = (payload as { findings?: unknown }).findings;
+  return typeof value === "string" ? value : "";
 }
 
 function nextCaseNumber(database: DatabaseSync) {
@@ -323,7 +333,7 @@ export function getCaseDetail(id: string): CaseDetail {
   return { ...mapSummary(row), responders: respondersFor(database, id), events: eventsFor(database, id) };
 }
 
-export type ResponderInput = { badge: string; callsign: string; name: string; role: string };
+export type ResponderInput = { badge: string; callsign?: string; name: string; role: string };
 
 export function createCase(input: {
   incidentType: string;
@@ -358,7 +368,7 @@ export function createCase(input: {
         randomUUID(),
         id,
         text(responder.badge, "Badge", 16),
-        text(responder.callsign, "Callsign", 24),
+        optionalText(responder.callsign, "Callsign", 24),
         text(responder.name, "Name", 80),
         text(responder.role, "Role", 40),
         index,
@@ -484,7 +494,7 @@ export function replaceResponders(caseId: string, responders: ResponderInput[]) 
         randomUUID(),
         caseId,
         text(responder.badge, "Badge", 16),
-        text(responder.callsign, "Callsign", 24),
+        optionalText(responder.callsign, "Callsign", 24),
         text(responder.name, "Name", 80),
         text(responder.role, "Role", 40),
         index,
@@ -520,7 +530,7 @@ export function createEvent(
         text(input.unit, "Unit", 24),
         text(input.title, "Title", 120),
         text(input.eventType, "Event type", 40),
-        text(input.findings, "Findings", 8000),
+        text(input.findings, "Description", 8000),
         createdBy,
         stamp,
         stamp,
@@ -554,7 +564,7 @@ export function updateEvent(
         text(input.unit, "Unit", 24),
         text(input.title, "Title", 120),
         text(input.eventType, "Event type", 40),
-        text(input.findings, "Findings", 8000),
+        text(input.findings, "Description", 8000),
         stamp,
         eventId,
       );
@@ -586,6 +596,7 @@ type NodeRow = {
   pos_y: number;
   payload: string;
   event_id: string | null;
+  findings: string | null;
   updated_at: string;
 };
 
@@ -610,7 +621,9 @@ function mapPhoto(row: PhotoRow): Photo {
 }
 
 function mapNode(row: NodeRow, photos: Photo[]): GraphNode {
-  const payload = parsePayload(row.kind, JSON.parse(row.payload));
+  const raw = asRecord(JSON.parse(row.payload));
+  if (row.kind === "evidence" && row.findings && !String(raw.findings ?? "").trim()) raw.findings = row.findings;
+  const payload = parsePayload(row.kind, raw);
   const base = { id: row.id, x: row.pos_x, y: row.pos_y, photos, updatedAt: row.updated_at };
   if (row.kind === "case") return { ...base, kind: "case", payload: payload as CasePayload };
   if (row.kind === "suspect") return { ...base, kind: "suspect", payload: payload as SuspectPayload };
@@ -624,7 +637,7 @@ function graphFrom(database: DatabaseSync, caseId: string): GraphData {
   mustCase(caseId, database);
   const nodes = database
     .prepare(
-      "SELECT id, case_id, kind, pos_x, pos_y, payload, event_id, updated_at FROM nodes WHERE case_id = ? ORDER BY created_at ASC",
+      "SELECT id, case_id, kind, pos_x, pos_y, payload, event_id, findings, updated_at FROM nodes WHERE case_id = ? ORDER BY created_at ASC",
     )
     .all(caseId) as NodeRow[];
   const photos = database
@@ -675,7 +688,7 @@ export function getGraph(caseId: string): GraphData {
 
 function mustNode(database: DatabaseSync, nodeId: string) {
   const row = database
-    .prepare("SELECT id, case_id, kind, pos_x, pos_y, payload, event_id, updated_at FROM nodes WHERE id = ?")
+    .prepare("SELECT id, case_id, kind, pos_x, pos_y, payload, event_id, findings, updated_at FROM nodes WHERE id = ?")
     .get(nodeId) as NodeRow | undefined;
   if (!row) throw new HttpError("Node not found.", 404);
   return row;
@@ -711,9 +724,9 @@ export function createNode(
     const stamp = nowIso();
     database
       .prepare(
-        "INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, event_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, event_id, findings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(id, caseId, input.kind, position.x, position.y, JSON.stringify(payload), eventId, stamp, stamp);
+      .run(id, caseId, input.kind, position.x, position.y, JSON.stringify(payload), eventId, storedFindings(input.kind, payload), stamp, stamp);
 
     const anchorId = input.linkTo?.trim() || rootId(database, caseId);
     const anchor = mustNode(database, anchorId);
@@ -747,16 +760,22 @@ export function updateNode(nodeId: string, patch: { payload?: unknown; x?: numbe
     const y = patch.y === undefined ? row.pos_y : Number(patch.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new HttpError("Position is invalid.", 400);
     const stamp = nowIso();
+    const findings =
+      patch.payload === undefined && row.kind === "evidence"
+        ? typeof asRecord(payload).findings === "string"
+          ? String(asRecord(payload).findings)
+          : row.findings
+        : storedFindings(row.kind, payload);
     if (patch.eventId !== undefined) {
       if (row.kind !== "evidence") throw new HttpError("Only evidence can be tied to an event.", 400);
       const eventId = evidenceEventId(database, row.case_id, patch.eventId);
       database
-        .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, event_id = ?, updated_at = ? WHERE id = ?")
-        .run(JSON.stringify(payload), x, y, eventId, stamp, nodeId);
+        .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, event_id = ?, findings = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(payload), x, y, eventId, findings, stamp, nodeId);
     } else {
       database
-        .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, updated_at = ? WHERE id = ?")
-        .run(JSON.stringify(payload), x, y, stamp, nodeId);
+        .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, findings = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(payload), x, y, findings, stamp, nodeId);
     }
     touchCase(database, row.case_id, stamp);
     return { ok: true };

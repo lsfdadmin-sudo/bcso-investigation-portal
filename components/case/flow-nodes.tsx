@@ -3,9 +3,9 @@
 import { createContext, useContext } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Emblem } from "@/components/brand/emblem";
-import { evidenceCategoryLabel, suspectStatusLabel } from "@/lib/constants";
+import { evidenceCategoryLabel, suspectStatusClass, suspectStatusLabel } from "@/lib/constants";
 import { formatWhen } from "@/lib/format";
-import type { CaseEvent, GraphNode, SuspectStatus } from "@/lib/types";
+import type { CaseEvent, GraphNode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export type FlowData = {
@@ -63,13 +63,6 @@ function Shell({
   );
 }
 
-function statusTone(status: SuspectStatus) {
-  if (status === "at_large") return "text-status-crimson";
-  if (status === "in_custody") return "text-status-emerald";
-  if (status === "witness") return "text-signal-cyan";
-  return "text-status-amber";
-}
-
 export function CaseFlowNode({ data, selected }: NodeProps<FlowNode>) {
   const node = data.node;
   if (!node || node.kind !== "case") return null;
@@ -96,7 +89,12 @@ export function SuspectFlowNode({ data, selected }: NodeProps<FlowNode>) {
     <Shell selected={selected} accent="#e5484d" label={`Suspect ${node.payload.name}`}>
       <div className="flex items-center justify-between border-b border-white/6 px-3 py-2">
         <span className="font-mono text-[10px] tracking-[0.16em] text-status-crimson">SUSPECT</span>
-        <span className={cn("font-mono text-[10px] uppercase tracking-[0.12em]", statusTone(node.payload.status))}>
+        <span
+          className={cn(
+            "inline-flex max-w-[9.5rem] truncate rounded-full border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em]",
+            suspectStatusClass(node.payload.status),
+          )}
+        >
           {suspectStatusLabel(node.payload.status)}
         </span>
       </div>
@@ -131,6 +129,9 @@ export function EvidenceFlowNode({ data, selected }: NodeProps<FlowNode>) {
         <div className="min-w-0 flex-1">
           <div className="font-mono text-xs text-signal-cyan">{node.payload.tag}</div>
           <div className="mt-1 line-clamp-2 text-xs leading-5 text-foreground/90">{node.payload.description || "No description"}</div>
+          {node.payload.findings ? (
+            <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-fog">{node.payload.findings}</p>
+          ) : null}
         </div>
         {photo ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -171,6 +172,7 @@ export function EventFlowNode({ data, selected }: NodeProps<FlowNode>) {
       <div className="px-3 py-2.5">
         <div className="font-mono text-[10px] text-gold-bright">{formatWhen(event.occurredAt)}</div>
         <div className="mt-1 line-clamp-2 text-sm font-medium leading-5">{event.title}</div>
+        {event.findings ? <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-fog">{event.findings}</p> : null}
         <div className="mt-2 inline-flex items-center rounded-full border border-gold/30 bg-gold/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-gold-bright">
           {count} evidence
         </div>

@@ -33,6 +33,7 @@ export function EvidenceDialog({
   onCreated: (graph: GraphData) => void;
 }) {
   const [description, setDescription] = useState("");
+  const [findings, setFindings] = useState("");
   const [category, setCategory] = useState<EvidenceCategory>("other");
   const [eventId, setEventId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -40,6 +41,7 @@ export function EvidenceDialog({
   function close(next: boolean) {
     if (!next) {
       setDescription("");
+      setFindings("");
       setCategory("other");
       setEventId(null);
     }
@@ -58,7 +60,7 @@ export function EvidenceDialog({
         body: JSON.stringify({
           kind: "evidence",
           eventId,
-          payload: { tag: "", category, description: description.trim(), custody: "", notes: "" },
+          payload: { tag: "", category, description: description.trim(), findings: findings.trim(), custody: "", notes: "" },
         }),
       });
       onCreated(graph);
@@ -83,6 +85,10 @@ export function EvidenceDialog({
           <div className="space-y-2">
             <Label htmlFor="evidence-description">Description</Label>
             <Textarea id="evidence-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What was recovered" />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="evidence-findings">Findings</Label>
+            <Textarea id="evidence-findings" value={findings} onChange={(event) => setFindings(event.target.value)} placeholder="What the item shows" />
           </div>
           <div className="space-y-2">
             <Label>Category</Label>

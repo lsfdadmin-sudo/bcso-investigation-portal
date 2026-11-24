@@ -4,7 +4,7 @@ import type { GraphEdge, GraphNode, NodeKind } from "@/lib/types";
 const WIDTH = 250;
 
 function height(kind: NodeKind) {
-  if (kind === "evidence") return 156;
+  if (kind === "evidence") return 188;
   if (kind === "case") return 122;
   return 136;
 }

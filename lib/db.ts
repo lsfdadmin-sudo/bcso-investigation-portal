@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   pos_y REAL NOT NULL,
   payload TEXT NOT NULL,
   event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
+  findings TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -138,9 +139,17 @@ function ensureEventColumn(database: DatabaseSync) {
   database.exec("CREATE INDEX IF NOT EXISTS idx_nodes_event ON nodes(event_id)");
 }
 
+function ensureFindingsColumn(database: DatabaseSync) {
+  const columns = database.prepare("PRAGMA table_info(nodes)").all() as { name: string }[];
+  if (!columns.some((column) => column.name === "findings")) {
+    database.exec("ALTER TABLE nodes ADD COLUMN findings TEXT");
+  }
+}
+
 function init(database: DatabaseSync) {
   database.exec(SCHEMA);
   ensureEventColumn(database);
+  ensureFindingsColumn(database);
   database.exec("BEGIN IMMEDIATE");
   try {
     ensurePasswords(database);
