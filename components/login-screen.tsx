@@ -47,7 +47,7 @@ export function LoginScreen() {
             <Emblem detailed className="mx-auto h-24 w-24" />
             <p className="mt-5 font-display text-[13px] tracking-[0.32em] text-gold">BLAINE COUNTY</p>
             <h1 className="mt-1 font-display text-3xl tracking-[0.08em] text-foreground">SHERIFF&apos;S OFFICE</h1>
-            <p className="mt-2 text-sm text-fog">Investigation portal · case files and link analysis</p>
+            <p className="mt-2 text-sm text-fog">Investigation portal · case files and the investigation board</p>
           </div>
           <form onSubmit={onSubmit} className="space-y-4 px-8 pb-8">
             <div className="space-y-2 text-left">

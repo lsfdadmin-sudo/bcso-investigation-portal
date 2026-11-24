@@ -7,21 +7,32 @@ import { Lightbox } from "@/components/case/lightbox";
 import { useSession } from "@/components/session";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { EVIDENCE_CATEGORIES, LINK_LABELS, SUSPECT_STATUSES, evidenceCategoryLabel, suspectStatusLabel } from "@/lib/constants";
 import { ApiError, api } from "@/lib/client";
+import { formatWhen } from "@/lib/format";
 import { can } from "@/lib/permissions";
 import { nodeTitle } from "@/lib/present";
-import type { EvidencePayload, GraphData, GraphEdge, GraphNode, NodeKind, RelatedPayload, SuspectPayload } from "@/lib/types";
+import type { CaseEvent, EvidencePayload, EventLink, GraphData, GraphEdge, GraphNode, NodeKind, RelatedPayload, SuspectPayload } from "@/lib/types";
 
 type Props = {
   caseId: string;
   node: GraphNode;
   nodes: GraphNode[];
   edges: GraphEdge[];
+  events: CaseEvent[];
+  eventLinks: EventLink[];
   locked: boolean;
   onClose: () => void;
   onGraph: (graph: GraphData) => void;
@@ -32,7 +43,7 @@ async function refresh(caseId: string) {
   return api<GraphData>(`/api/cases/${caseId}/graph`);
 }
 
-export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph, onFocus }: Props) {
+export function Inspector({ caseId, node, nodes, edges, events, eventLinks, locked, onClose, onGraph, onFocus }: Props) {
   const { role } = useSession();
   const editable =
     !locked &&
@@ -63,13 +74,19 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
   const [uploading, setUploading] = useState(false);
   const [lightbox, setLightbox] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [eventTarget, setEventTarget] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     setSuspect(node.kind === "suspect" ? node.payload : null);
     setEvidence(node.kind === "evidence" ? node.payload : null);
     setRelated(node.kind === "related" ? node.payload : null);
     setLinkTarget("");
-  }, [node]);
+    setEventTarget("");
+    setConfirmDelete(false);
+    // Reset the draft when the record identity or server stamp changes, not on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.id, node.updatedAt, node.kind]);
 
   const links = useMemo(
     () =>
@@ -83,6 +100,14 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
   );
 
   const others = nodes.filter((item) => item.id !== node.id);
+  const itemEvents = useMemo(
+    () =>
+      eventLinks
+        .filter((link) => link.nodeId === node.id)
+        .map((link) => ({ link, event: events.find((item) => item.id === link.eventId) })),
+    [eventLinks, events, node.id],
+  );
+  const openEvents = events.filter((item) => !itemEvents.some((linked) => linked.link.eventId === item.id));
 
   async function save() {
     const payload = node.kind === "suspect" ? suspect : node.kind === "evidence" ? evidence : related;
@@ -184,14 +209,43 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
     }
   }
 
+  async function linkEvent() {
+    if (!eventTarget) {
+      toast.error("Choose an event to link.");
+      return;
+    }
+    const label = linkLabel === "Custom" ? customLabel.trim() : linkLabel;
+    try {
+      onGraph(
+        await api<GraphData>(`/api/cases/${caseId}/event-links`, {
+          method: "POST",
+          body: JSON.stringify({ eventId: eventTarget, nodeId: node.id, label: label || "Associated With" }),
+        }),
+      );
+      setEventTarget("");
+      toast.success("Event linked.");
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "The event was not linked.");
+    }
+  }
+
+  async function unlinkEvent(linkId: string) {
+    try {
+      onGraph(await api<GraphData>(`/api/cases/${caseId}/event-links/${linkId}`, { method: "DELETE" }));
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "The event was not unlinked.");
+    }
+  }
+
   async function removeNode() {
     try {
       await api(`/api/cases/${caseId}/nodes/${node.id}`, { method: "DELETE" });
+      setConfirmDelete(false);
       onClose();
       onGraph(await refresh(caseId));
-      toast.success("Node removed from the chart.");
+      toast.success("Item removed from the case.");
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "The node was not deleted.");
+      toast.error(error instanceof ApiError ? error.message : "The item was not deleted.");
     }
   }
 
@@ -368,8 +422,53 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
           ) : null}
         </section>
 
+        {node.kind !== "case" ? (
+          <section>
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gold">Linked events</h3>
+            <ul className="mt-2 space-y-2">
+              {itemEvents.length === 0 ? <li className="text-xs text-fog">Not linked to an event yet.</li> : null}
+              {itemEvents.map(({ link, event }) => (
+                <li key={link.id} className="flex items-center gap-2 rounded-md border border-white/8 px-2 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm">{event?.title ?? "Missing event"}</div>
+                    <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-fog">
+                      {link.label}
+                      {event ? ` · ${formatWhen(event.occurredAt)}` : ""}
+                    </div>
+                  </div>
+                  {canLink ? (
+                    <button type="button" aria-label={`Unlink ${event?.title ?? "event"}`} className="text-fog hover:text-status-crimson" onClick={() => void unlinkEvent(link.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            {canLink && openEvents.length ? (
+              <div className="mt-3 space-y-2">
+                <Select value={eventTarget || undefined} onValueChange={setEventTarget}>
+                  <SelectTrigger aria-label="Link to event">
+                    <SelectValue placeholder="Link to event" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {openEvents.map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.eventType} · {item.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button type="button" variant="secondary" onClick={() => void linkEvent()}>
+                  <Link2 />
+                  Link to event
+                </Button>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
         <section>
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gold">Linked nodes</h3>
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gold">Linked suspects and evidence</h3>
           <ul className="mt-2 space-y-2">
             {links.length === 0 ? <li className="text-xs text-fog">Nothing linked yet.</li> : null}
             {links.map(({ edge, other }) => (
@@ -457,12 +556,30 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
         ) : null}
 
         {canDelete ? (
-          <Button type="button" variant="destructive" onClick={() => void removeNode()}>
+          <Button type="button" variant="destructive" onClick={() => setConfirmDelete(true)}>
             <Trash2 />
-            Delete node
+            Delete {node.kind}
           </Button>
         ) : null}
       </div>
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this {node.kind}?</DialogTitle>
+            <DialogDescription>
+              {nodeTitle(node)} will be removed from the case, including its photos and every link to events, suspects, and evidence. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={() => setConfirmDelete(false)}>
+              Keep item
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void removeNode()}>
+              Delete {node.kind}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {lightbox !== null ? (
         <Lightbox photos={node.photos} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
       ) : null}

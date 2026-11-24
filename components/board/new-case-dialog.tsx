@@ -91,7 +91,7 @@ export function NewCaseDialog({ open, onOpenChange }: { open: boolean; onOpenCha
         <DialogHeader>
           <DialogTitle>Open a case</DialogTitle>
           <DialogDescription>
-            Start the incident file. A case number is assigned when the file is created, and the incident becomes the root of the link chart.
+            Start the incident file. A case number is assigned when the file is created, and the incident opens on the investigation board.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">

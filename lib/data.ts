@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { EVIDENCE_CATEGORIES, SUSPECT_STATUSES } from "./constants";
 import { getDb, transaction } from "./db";
 import { HttpError } from "./http";
+import { publishCase } from "./live";
 import { uploadDir } from "./paths";
 import type {
   CaseDetail,
@@ -14,6 +15,7 @@ import type {
   CaseSummary,
   EvidenceCategory,
   EvidencePayload,
+  EventLink,
   GraphData,
   GraphEdge,
   GraphNode,
@@ -224,6 +226,11 @@ function defaultLinkLabel(kind: NodeKind) {
   return "Associated With";
 }
 
+function finish<T>(caseId: string, result: T): T {
+  publishCase(caseId);
+  return result;
+}
+
 export function listCases(filters: { status: CaseStatus; q?: string; type?: string }) {
   const database = getDb();
   const q = filters.q?.trim() ?? "";
@@ -402,7 +409,7 @@ export function updateCase(
   },
   badge: string,
 ) {
-  return transaction((database) => {
+  const updated = transaction((database) => {
     const existing = mustCase(id, database);
     const dataTouched =
       patch.incidentType !== undefined ||
@@ -436,6 +443,7 @@ export function updateCase(
     syncRoot(database, id);
     return getCaseDetailFrom(database, id);
   });
+  return finish(id, updated);
 }
 
 function photoFilesForCase(database: DatabaseSync, caseId: string) {
@@ -456,11 +464,12 @@ export function deleteCase(id: string) {
     tx.prepare("DELETE FROM cases WHERE id = ?").run(id);
   });
   for (const file of files) unlinkUpload(file.filename);
+  publishCase(id);
   return { ok: true };
 }
 
 export function replaceResponders(caseId: string, responders: ResponderInput[]) {
-  return transaction((database) => {
+  const saved = transaction((database) => {
     const existing = mustCase(caseId, database);
     assertMutable(existing);
     if (responders.length > 24) throw new HttpError("A case can list up to 24 responders.", 400);
@@ -482,6 +491,7 @@ export function replaceResponders(caseId: string, responders: ResponderInput[]) 
     touchCase(database, caseId);
     return respondersFor(database, caseId);
   });
+  return finish(caseId, saved);
 }
 
 export function createEvent(
@@ -489,7 +499,7 @@ export function createEvent(
   input: { occurredAt: string; badge: string; unit: string; title: string; eventType: string; findings: string },
   createdBy: string,
 ) {
-  return transaction((database) => {
+  const created = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const id = randomUUID();
     const stamp = nowIso();
@@ -515,6 +525,7 @@ export function createEvent(
     touchCase(database, caseId, stamp);
     return eventsFor(database, caseId).find((event) => event.id === id);
   });
+  return finish(caseId, created);
 }
 
 export function updateEvent(
@@ -522,7 +533,7 @@ export function updateEvent(
   eventId: string,
   input: { occurredAt: string; badge: string; unit: string; title: string; eventType: string; findings: string },
 ) {
-  return transaction((database) => {
+  const updated = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const existing = database.prepare("SELECT id FROM events WHERE id = ? AND case_id = ?").get(eventId, caseId);
     if (!existing) throw new HttpError("Event not found.", 404);
@@ -546,16 +557,18 @@ export function updateEvent(
     touchCase(database, caseId, stamp);
     return eventsFor(database, caseId).find((event) => event.id === eventId);
   });
+  return finish(caseId, updated);
 }
 
 export function deleteEvent(caseId: string, eventId: string) {
-  return transaction((database) => {
+  const removed = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const result = database.prepare("DELETE FROM events WHERE id = ? AND case_id = ?").run(eventId, caseId);
     if (!result.changes) throw new HttpError("Event not found.", 404);
     touchCase(database, caseId);
     return { ok: true };
   });
+  return finish(caseId, removed);
 }
 
 type NodeRow = {
@@ -641,6 +654,18 @@ function graphFrom(database: DatabaseSync, caseId: string): GraphData {
         label: edge.label,
       }),
     ),
+    eventLinks: (
+      database
+        .prepare("SELECT id, event_id, node_id, label FROM event_links WHERE case_id = ? ORDER BY created_at ASC")
+        .all(caseId) as { id: string; event_id: string; node_id: string; label: string }[]
+    ).map(
+      (link): EventLink => ({
+        id: link.id,
+        eventId: link.event_id,
+        nodeId: link.node_id,
+        label: link.label,
+      }),
+    ),
   };
 }
 
@@ -656,14 +681,29 @@ function mustNode(database: DatabaseSync, nodeId: string) {
   return row;
 }
 
+function attachEventLink(database: DatabaseSync, caseId: string, eventId: string, nodeId: string, label: string | null) {
+  const event = database.prepare("SELECT id FROM events WHERE id = ? AND case_id = ?").get(eventId, caseId);
+  if (!event) throw new HttpError("Event not found.", 404);
+  const node = mustNode(database, nodeId);
+  if (node.case_id !== caseId) throw new HttpError("Link the item inside this case.", 400);
+  if (node.kind === "case") throw new HttpError("The case root is not linked as an event item.", 400);
+  const duplicate = database.prepare("SELECT id FROM event_links WHERE event_id = ? AND node_id = ?").get(eventId, nodeId);
+  if (duplicate) throw new HttpError("That item is already linked to this event.", 409);
+  const clean = text(label?.trim() || defaultLinkLabel(node.kind), "Relationship", 80);
+  const id = randomUUID();
+  database
+    .prepare("INSERT INTO event_links (id, case_id, event_id, node_id, label, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(id, caseId, eventId, nodeId, clean, nowIso());
+}
+
 export function createNode(
   caseId: string,
-  input: { kind: NodeKind; payload: unknown; linkTo?: string | null; linkLabel?: string | null },
+  input: { kind: NodeKind; payload: unknown; linkTo?: string | null; linkLabel?: string | null; eventId?: string | null },
 ) {
   if (input.kind !== "suspect" && input.kind !== "evidence" && input.kind !== "related") {
     throw new HttpError("Choose a suspect, evidence item, or related item.", 400);
   }
-  return transaction((database) => {
+  const graph = transaction((database) => {
     const existing = mustCase(caseId, database);
     assertMutable(existing);
     const position = placeNode(database, caseId, input.kind);
@@ -692,14 +732,18 @@ export function createNode(
          VALUES (?, ?, ?, ?, 'b', 't', ?, ?)`,
       )
       .run(randomUUID(), caseId, anchor.id, id, label, stamp);
+    if (input.eventId?.trim()) attachEventLink(database, caseId, input.eventId.trim(), id, null);
     touchCase(database, caseId, stamp);
     return graphFrom(database, caseId);
   });
+  return finish(caseId, graph);
 }
 
 export function updateNode(nodeId: string, patch: { payload?: unknown; x?: number; y?: number }) {
-  return transaction((database) => {
+  let caseId = "";
+  const result = transaction((database) => {
     const row = mustNode(database, nodeId);
+    caseId = row.case_id;
     assertMutable(mustCase(row.case_id, database));
     let payload = JSON.parse(row.payload) as unknown;
     if (patch.payload !== undefined) {
@@ -716,10 +760,11 @@ export function updateNode(nodeId: string, patch: { payload?: unknown; x?: numbe
     touchCase(database, row.case_id, stamp);
     return { ok: true };
   });
+  return finish(caseId, result);
 }
 
 export function savePositions(caseId: string, positions: { id: string; x: number; y: number }[]) {
-  return transaction((database) => {
+  const result = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const stamp = nowIso();
     const update = database.prepare(
@@ -735,6 +780,7 @@ export function savePositions(caseId: string, positions: { id: string; x: number
     touchCase(database, caseId, stamp);
     return { ok: true };
   });
+  return finish(caseId, result);
 }
 
 function resolvedUpload(filename: string) {
@@ -761,6 +807,7 @@ export function deleteNode(nodeId: string) {
     touchCase(tx, row.case_id);
   });
   for (const photo of photos) unlinkUpload(photo.filename);
+  publishCase(row.case_id);
   return { ok: true };
 }
 
@@ -768,7 +815,7 @@ export function createEdge(
   caseId: string,
   input: { sourceId: string; targetId: string; label?: string; sourceHandle?: string | null; targetHandle?: string | null },
 ) {
-  return transaction((database) => {
+  const edge = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const source = mustNode(database, input.sourceId);
     const target = mustNode(database, input.targetId);
@@ -807,10 +854,11 @@ export function createEdge(
       label,
     } satisfies GraphEdge;
   });
+  return finish(caseId, edge);
 }
 
 export function updateEdge(caseId: string, edgeId: string, label: string) {
-  return transaction((database) => {
+  const updated = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const clean = text(label, "Relationship", 80);
     const result = database
@@ -820,16 +868,18 @@ export function updateEdge(caseId: string, edgeId: string, label: string) {
     touchCase(database, caseId);
     return { id: edgeId, label: clean };
   });
+  return finish(caseId, updated);
 }
 
 export function deleteEdge(caseId: string, edgeId: string) {
-  return transaction((database) => {
+  const removed = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const result = database.prepare("DELETE FROM edges WHERE id = ? AND case_id = ?").run(edgeId, caseId);
     if (!result.changes) throw new HttpError("Relationship not found.", 404);
     touchCase(database, caseId);
     return { ok: true };
   });
+  return finish(caseId, removed);
 }
 
 const ALLOWED_MIME = new Map<string, string>([
@@ -906,6 +956,7 @@ export async function addPhotos(nodeId: string, files: File[]) {
       "SELECT id, node_id, filename, original_name, mime, size, created_at FROM photos WHERE node_id = ? ORDER BY created_at ASC",
     )
     .all(nodeId) as PhotoRow[];
+  publishCase(node.case_id);
   return { photos: photos.map(mapPhoto) };
 }
 
@@ -935,7 +986,29 @@ export function deletePhoto(photoId: string) {
     touchCase(tx, row.case_id);
   });
   unlinkUpload(row.filename);
+  publishCase(row.case_id);
   return { ok: true };
+}
+
+export function createEventLink(caseId: string, input: { eventId: string; nodeId: string; label?: string | null }) {
+  const graph = transaction((database) => {
+    assertMutable(mustCase(caseId, database));
+    attachEventLink(database, caseId, text(input.eventId, "Event", 80), text(input.nodeId, "Item", 80), input.label ?? null);
+    touchCase(database, caseId);
+    return graphFrom(database, caseId);
+  });
+  return finish(caseId, graph);
+}
+
+export function deleteEventLink(caseId: string, linkId: string) {
+  const graph = transaction((database) => {
+    assertMutable(mustCase(caseId, database));
+    const removed = database.prepare("DELETE FROM event_links WHERE id = ? AND case_id = ?").run(linkId, caseId);
+    if (!removed.changes) throw new HttpError("That event link was not found.", 404);
+    touchCase(database, caseId);
+    return graphFrom(database, caseId);
+  });
+  return finish(caseId, graph);
 }
 
 export function nodeCase(nodeId: string) {

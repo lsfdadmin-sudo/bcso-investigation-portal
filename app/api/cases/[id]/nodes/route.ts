@@ -24,6 +24,7 @@ export async function POST(request: Request, context: Ctx) {
       payload: body.payload ?? {},
       linkTo: typeof body.linkTo === "string" ? body.linkTo : null,
       linkLabel: typeof body.linkLabel === "string" ? body.linkLabel : null,
+      eventId: typeof body.eventId === "string" ? body.eventId : null,
     });
     return Response.json(graph, { status: 201, headers: { "Cache-Control": "no-store" } });
   });

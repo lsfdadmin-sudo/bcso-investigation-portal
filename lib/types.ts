@@ -103,6 +103,13 @@ export type GraphEdge = {
   label: string;
 };
 
+export type EventLink = {
+  id: string;
+  eventId: string;
+  nodeId: string;
+  label: string;
+};
+
 export type Responder = {
   id: string;
   badge: string;
@@ -150,4 +157,5 @@ export type CaseDetail = CaseSummary & {
 export type GraphData = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  eventLinks: EventLink[];
 };
