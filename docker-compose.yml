@@ -1,0 +1,18 @@
+services:
+  portal:
+    build: .
+    ports:
+      - "4317:4317"
+    environment:
+      PORT: "4317"
+      DATA_DIR: /app/data
+      BCSO_PATROL_PASSWORD: patrol412
+      BCSO_DETECTIVE_PASSWORD: detective08
+      BCSO_ADMIN_PASSWORD: sheriff01
+      BCSO_COOKIE_SECURE: "false"
+    volumes:
+      - bcso-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  bcso-data:

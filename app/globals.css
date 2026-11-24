@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-gold: #d4af37;
+  --color-gold-bright: #e0b84c;
+  --color-obsidian: #090c10;
+  --color-ink: #0f141c;
+  --color-panel: #161d28;
+  --color-status-amber: #e8a317;
+  --color-status-emerald: #3ddc97;
+  --color-status-crimson: #e5484d;
+  --color-signal-cyan: #3bc9db;
+  --color-signal-indigo: #818cf8;
+  --color-fog: #8e9aab;
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-barlow);
+  --radius-sm: 0.25rem;
+  --radius-md: 0.4rem;
+  --radius-lg: 0.6rem;
+}
+
+:root {
+  --background: #090c10;
+  --foreground: #e7ecf3;
+  --card: #0f141c;
+  --card-foreground: #e7ecf3;
+  --popover: #161d28;
+  --popover-foreground: #e7ecf3;
+  --primary: #d4af37;
+  --primary-foreground: #1a1404;
+  --secondary: #161d28;
+  --secondary-foreground: #e7ecf3;
+  --muted: #121820;
+  --muted-foreground: #8e9aab;
+  --accent: #1c2533;
+  --accent-foreground: #e7ecf3;
+  --destructive: #e5484d;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.1);
+  --ring: #d4af37;
+  color-scheme: dark;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3544 transparent;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+::selection {
+  background: rgba(212, 175, 55, 0.35);
+  color: white;
+}
+
+.tactical-grid {
+  background-color: #090c10;
+  background-image:
+    radial-gradient(ellipse 70% 45% at 50% -10%, rgba(212, 175, 55, 0.14), transparent 55%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: auto, 56px 56px, 56px 56px;
+}
+
+.inspector-in {
+  animation: inspector-in 180ms ease-out;
+}
+
+@keyframes inspector-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.react-flow {
+  --xy-background-color: #0b1016;
+  --xy-node-border-radius: 8px;
+  background: #0b1016;
+}
+
+.react-flow__attribution {
+  background: transparent !important;
+  opacity: 0.4;
+}
+
+.react-flow__controls-button {
+  background: #161d28 !important;
+  border-bottom-color: rgba(255, 255, 255, 0.06) !important;
+  fill: #e7ecf3 !important;
+}
+
+.react-flow__controls-button:hover {
+  background: #1c2533 !important;
+}
+
+.react-flow__minimap {
+  background: #0f141c !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+@media (max-width: 1023px) {
+  .react-flow__minimap {
+    display: none;
+  }
+}
+
+.react-flow__edge-path {
+  stroke-linecap: round;
+}
+
+.react-flow__handle {
+  width: 8px;
+  height: 8px;
+  background: #d4af37;
+  border: 1px solid #090c10;
+}
