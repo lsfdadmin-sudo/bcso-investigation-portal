@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 
+export type CaseSignal = {
+  caseId: string;
+  at: string;
+};
+
 export type LiveKind = "case" | "status" | "responders" | "event" | "node" | "edge" | "photo" | "positions" | "ping";
 
 export type LiveAction = "create" | "update" | "delete" | "refresh";
@@ -21,8 +26,11 @@ type Bus = { listeners: Set<Listener> };
 const globalForLive = globalThis as unknown as { bcsoLive?: Bus };
 
 function bus(): Bus {
-  if (!globalForLive.bcsoLive) globalForLive.bcsoLive = { listeners: new Set() };
-  return globalForLive.bcsoLive;
+  const current = globalForLive.bcsoLive;
+  if (!current || !(current.listeners instanceof Set)) {
+    globalForLive.bcsoLive = { listeners: new Set() };
+  }
+  return globalForLive.bcsoLive as Bus;
 }
 
 const clientStore = new AsyncLocalStorage<{ clientId: string | null }>();
@@ -31,7 +39,11 @@ export function bindLiveClient<T>(clientId: string | null, fn: () => Promise<T> 
   return clientStore.run({ clientId }, fn);
 }
 
-export function emitLive(event: { caseId: string | null; kind: Exclude<LiveKind, "ping">; action: Exclude<LiveAction, "refresh"> }) {
+export function emitLive(event: {
+  caseId: string | null;
+  kind: Exclude<LiveKind, "ping">;
+  action: Exclude<LiveAction, "refresh">;
+}) {
   const full: LiveEvent = {
     id: randomUUID(),
     at: new Date().toISOString(),
@@ -53,6 +65,17 @@ export function subscribeLive(listener: Listener) {
   const listeners = bus().listeners;
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+export function publishCase(caseId: string) {
+  emitLive({ caseId, kind: "case", action: "update" });
+}
+
+export function subscribeCases(listener: (signal: CaseSignal) => void) {
+  return subscribeLive((event) => {
+    if (!event.caseId) return;
+    listener({ caseId: event.caseId, at: event.at });
+  });
 }
 
 export function liveStreamResponse(filterCaseId: string | null) {
