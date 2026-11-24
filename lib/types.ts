@@ -80,6 +80,7 @@ export type GraphNode =
       kind: "evidence";
       x: number;
       y: number;
+      eventId: string | null;
       payload: EvidencePayload;
       photos: Photo[];
       updatedAt: string;

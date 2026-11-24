@@ -1,5 +1,7 @@
+import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { getSession } from "./auth";
+import { bindLiveClient } from "./live";
 import { can, type Action } from "./permissions";
 import type { Session } from "./types";
 
@@ -30,18 +32,26 @@ export async function withAuth(
   action: Action | null,
   handler: (session: Session) => Promise<unknown> | unknown,
 ) {
+  let clientId: string | null = null;
   try {
-    const session = await getSession();
-    if (!session) return json({ error: "Unauthorized" }, 401);
-    if (action && !can(session.role, action)) {
-      return json({ error: "Insufficient clearance for this action." }, 403);
-    }
-    const result = await handler(session);
-    if (result instanceof Response) return result;
-    return json(result ?? { ok: true });
-  } catch (error) {
-    if (error instanceof HttpError) return json({ error: error.message }, error.status);
-    console.error(error);
-    return json({ error: "The portal could not complete that request." }, 500);
+    clientId = (await headers()).get("x-bcso-client");
+  } catch {
+    clientId = null;
   }
+  return bindLiveClient(clientId, async () => {
+    try {
+      const session = await getSession();
+      if (!session) return json({ error: "Unauthorized" }, 401);
+      if (action && !can(session.role, action)) {
+        return json({ error: "Insufficient clearance for this action." }, 403);
+      }
+      const result = await handler(session);
+      if (result instanceof Response) return result;
+      return json(result ?? { ok: true });
+    } catch (error) {
+      if (error instanceof HttpError) return json({ error: error.message }, error.status);
+      console.error(error);
+      return json({ error: "The portal could not complete that request." }, 500);
+    }
+  });
 }

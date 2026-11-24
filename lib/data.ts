@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { EVIDENCE_CATEGORIES, SUSPECT_STATUSES } from "./constants";
 import { getDb, transaction } from "./db";
 import { HttpError } from "./http";
+import { emitLive } from "./live";
 import { uploadDir } from "./paths";
 import type {
   CaseDetail,
@@ -332,7 +333,7 @@ export function createCase(input: {
   responders?: ResponderInput[];
   badge: string;
 }) {
-  return transaction((database) => {
+  const created = transaction((database) => {
     const id = randomUUID();
     const stamp = nowIso();
     const caseNumber = nextCaseNumber(database);
@@ -376,6 +377,8 @@ export function createCase(input: {
       );
     return getCaseDetailFrom(database, id);
   });
+  emitLive({ caseId: created.id, kind: "case", action: "create" });
+  return created;
 }
 
 function getCaseDetailFrom(database: DatabaseSync, id: string): CaseDetail {
@@ -402,7 +405,8 @@ export function updateCase(
   },
   badge: string,
 ) {
-  return transaction((database) => {
+  const existingStatus = mustCase(id).status;
+  const updated = transaction((database) => {
     const existing = mustCase(id, database);
     const dataTouched =
       patch.incidentType !== undefined ||
@@ -436,6 +440,12 @@ export function updateCase(
     syncRoot(database, id);
     return getCaseDetailFrom(database, id);
   });
+  emitLive({
+    caseId: id,
+    kind: patch.status && patch.status !== existingStatus ? "status" : "case",
+    action: "update",
+  });
+  return updated;
 }
 
 function photoFilesForCase(database: DatabaseSync, caseId: string) {
@@ -456,11 +466,12 @@ export function deleteCase(id: string) {
     tx.prepare("DELETE FROM cases WHERE id = ?").run(id);
   });
   for (const file of files) unlinkUpload(file.filename);
+  emitLive({ caseId: id, kind: "case", action: "delete" });
   return { ok: true };
 }
 
 export function replaceResponders(caseId: string, responders: ResponderInput[]) {
-  return transaction((database) => {
+  const roster = transaction((database) => {
     const existing = mustCase(caseId, database);
     assertMutable(existing);
     if (responders.length > 24) throw new HttpError("A case can list up to 24 responders.", 400);
@@ -482,6 +493,8 @@ export function replaceResponders(caseId: string, responders: ResponderInput[]) 
     touchCase(database, caseId);
     return respondersFor(database, caseId);
   });
+  emitLive({ caseId, kind: "responders", action: "update" });
+  return roster;
 }
 
 export function createEvent(
@@ -489,7 +502,7 @@ export function createEvent(
   input: { occurredAt: string; badge: string; unit: string; title: string; eventType: string; findings: string },
   createdBy: string,
 ) {
-  return transaction((database) => {
+  const created = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const id = randomUUID();
     const stamp = nowIso();
@@ -515,6 +528,8 @@ export function createEvent(
     touchCase(database, caseId, stamp);
     return eventsFor(database, caseId).find((event) => event.id === id);
   });
+  emitLive({ caseId, kind: "event", action: "create" });
+  return created;
 }
 
 export function updateEvent(
@@ -522,7 +537,7 @@ export function updateEvent(
   eventId: string,
   input: { occurredAt: string; badge: string; unit: string; title: string; eventType: string; findings: string },
 ) {
-  return transaction((database) => {
+  const updated = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const existing = database.prepare("SELECT id FROM events WHERE id = ? AND case_id = ?").get(eventId, caseId);
     if (!existing) throw new HttpError("Event not found.", 404);
@@ -546,16 +561,21 @@ export function updateEvent(
     touchCase(database, caseId, stamp);
     return eventsFor(database, caseId).find((event) => event.id === eventId);
   });
+  emitLive({ caseId, kind: "event", action: "update" });
+  return updated;
 }
 
 export function deleteEvent(caseId: string, eventId: string) {
-  return transaction((database) => {
+  const removed = transaction((database) => {
     assertMutable(mustCase(caseId, database));
+    database.prepare("UPDATE nodes SET event_id = NULL WHERE event_id = ? AND case_id = ?").run(eventId, caseId);
     const result = database.prepare("DELETE FROM events WHERE id = ? AND case_id = ?").run(eventId, caseId);
     if (!result.changes) throw new HttpError("Event not found.", 404);
     touchCase(database, caseId);
     return { ok: true };
   });
+  emitLive({ caseId, kind: "event", action: "delete" });
+  return removed;
 }
 
 type NodeRow = {
@@ -565,6 +585,7 @@ type NodeRow = {
   pos_x: number;
   pos_y: number;
   payload: string;
+  event_id: string | null;
   updated_at: string;
 };
 
@@ -593,14 +614,18 @@ function mapNode(row: NodeRow, photos: Photo[]): GraphNode {
   const base = { id: row.id, x: row.pos_x, y: row.pos_y, photos, updatedAt: row.updated_at };
   if (row.kind === "case") return { ...base, kind: "case", payload: payload as CasePayload };
   if (row.kind === "suspect") return { ...base, kind: "suspect", payload: payload as SuspectPayload };
-  if (row.kind === "evidence") return { ...base, kind: "evidence", payload: payload as EvidencePayload };
+  if (row.kind === "evidence") {
+    return { ...base, kind: "evidence", eventId: row.event_id, payload: payload as EvidencePayload };
+  }
   return { ...base, kind: "related", payload: payload as RelatedPayload };
 }
 
 function graphFrom(database: DatabaseSync, caseId: string): GraphData {
   mustCase(caseId, database);
   const nodes = database
-    .prepare("SELECT id, case_id, kind, pos_x, pos_y, payload, updated_at FROM nodes WHERE case_id = ? ORDER BY created_at ASC")
+    .prepare(
+      "SELECT id, case_id, kind, pos_x, pos_y, payload, event_id, updated_at FROM nodes WHERE case_id = ? ORDER BY created_at ASC",
+    )
     .all(caseId) as NodeRow[];
   const photos = database
     .prepare(
@@ -650,20 +675,27 @@ export function getGraph(caseId: string): GraphData {
 
 function mustNode(database: DatabaseSync, nodeId: string) {
   const row = database
-    .prepare("SELECT id, case_id, kind, pos_x, pos_y, payload, updated_at FROM nodes WHERE id = ?")
+    .prepare("SELECT id, case_id, kind, pos_x, pos_y, payload, event_id, updated_at FROM nodes WHERE id = ?")
     .get(nodeId) as NodeRow | undefined;
   if (!row) throw new HttpError("Node not found.", 404);
   return row;
 }
 
+function evidenceEventId(database: DatabaseSync, caseId: string, eventId: string | null | undefined) {
+  if (!eventId) return null;
+  const match = database.prepare("SELECT id FROM events WHERE id = ? AND case_id = ?").get(eventId, caseId);
+  if (!match) throw new HttpError("That event is not on this case.", 400);
+  return eventId;
+}
+
 export function createNode(
   caseId: string,
-  input: { kind: NodeKind; payload: unknown; linkTo?: string | null; linkLabel?: string | null },
+  input: { kind: NodeKind; payload: unknown; linkTo?: string | null; linkLabel?: string | null; eventId?: string | null },
 ) {
   if (input.kind !== "suspect" && input.kind !== "evidence" && input.kind !== "related") {
     throw new HttpError("Choose a suspect, evidence item, or related item.", 400);
   }
-  return transaction((database) => {
+  const graph = transaction((database) => {
     const existing = mustCase(caseId, database);
     assertMutable(existing);
     const position = placeNode(database, caseId, input.kind);
@@ -674,13 +706,14 @@ export function createNode(
     if (input.kind === "suspect" && !raw.status) raw.status = "person_of_interest";
     if (input.kind === "evidence" && !raw.category) raw.category = "other";
     const payload = parsePayload(input.kind, raw);
+    const eventId = input.kind === "evidence" ? evidenceEventId(database, caseId, input.eventId) : null;
     const id = randomUUID();
     const stamp = nowIso();
     database
       .prepare(
-        "INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, event_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(id, caseId, input.kind, position.x, position.y, JSON.stringify(payload), stamp, stamp);
+      .run(id, caseId, input.kind, position.x, position.y, JSON.stringify(payload), eventId, stamp, stamp);
 
     const anchorId = input.linkTo?.trim() || rootId(database, caseId);
     const anchor = mustNode(database, anchorId);
@@ -695,10 +728,14 @@ export function createNode(
     touchCase(database, caseId, stamp);
     return graphFrom(database, caseId);
   });
+  emitLive({ caseId, kind: "node", action: "create" });
+  return graph;
 }
 
-export function updateNode(nodeId: string, patch: { payload?: unknown; x?: number; y?: number }) {
-  return transaction((database) => {
+export function updateNode(nodeId: string, patch: { payload?: unknown; x?: number; y?: number; eventId?: string | null }) {
+  const rowBefore = mustNode(getDb(), nodeId);
+  const movedOnly = patch.payload === undefined && patch.eventId === undefined;
+  const updated = transaction((database) => {
     const row = mustNode(database, nodeId);
     assertMutable(mustCase(row.case_id, database));
     let payload = JSON.parse(row.payload) as unknown;
@@ -710,16 +747,26 @@ export function updateNode(nodeId: string, patch: { payload?: unknown; x?: numbe
     const y = patch.y === undefined ? row.pos_y : Number(patch.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new HttpError("Position is invalid.", 400);
     const stamp = nowIso();
-    database
-      .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(payload), x, y, stamp, nodeId);
+    if (patch.eventId !== undefined) {
+      if (row.kind !== "evidence") throw new HttpError("Only evidence can be tied to an event.", 400);
+      const eventId = evidenceEventId(database, row.case_id, patch.eventId);
+      database
+        .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, event_id = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(payload), x, y, eventId, stamp, nodeId);
+    } else {
+      database
+        .prepare("UPDATE nodes SET payload = ?, pos_x = ?, pos_y = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(payload), x, y, stamp, nodeId);
+    }
     touchCase(database, row.case_id, stamp);
     return { ok: true };
   });
+  emitLive({ caseId: rowBefore.case_id, kind: movedOnly ? "positions" : "node", action: "update" });
+  return updated;
 }
 
 export function savePositions(caseId: string, positions: { id: string; x: number; y: number }[]) {
-  return transaction((database) => {
+  const saved = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const stamp = nowIso();
     const update = database.prepare(
@@ -735,6 +782,8 @@ export function savePositions(caseId: string, positions: { id: string; x: number
     touchCase(database, caseId, stamp);
     return { ok: true };
   });
+  emitLive({ caseId, kind: "positions", action: "update" });
+  return saved;
 }
 
 function resolvedUpload(filename: string) {
@@ -761,6 +810,7 @@ export function deleteNode(nodeId: string) {
     touchCase(tx, row.case_id);
   });
   for (const photo of photos) unlinkUpload(photo.filename);
+  emitLive({ caseId: row.case_id, kind: "node", action: "delete" });
   return { ok: true };
 }
 
@@ -768,7 +818,7 @@ export function createEdge(
   caseId: string,
   input: { sourceId: string; targetId: string; label?: string; sourceHandle?: string | null; targetHandle?: string | null },
 ) {
-  return transaction((database) => {
+  const edge = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const source = mustNode(database, input.sourceId);
     const target = mustNode(database, input.targetId);
@@ -807,10 +857,12 @@ export function createEdge(
       label,
     } satisfies GraphEdge;
   });
+  emitLive({ caseId, kind: "edge", action: "create" });
+  return edge;
 }
 
 export function updateEdge(caseId: string, edgeId: string, label: string) {
-  return transaction((database) => {
+  const updated = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const clean = text(label, "Relationship", 80);
     const result = database
@@ -820,16 +872,20 @@ export function updateEdge(caseId: string, edgeId: string, label: string) {
     touchCase(database, caseId);
     return { id: edgeId, label: clean };
   });
+  emitLive({ caseId, kind: "edge", action: "update" });
+  return updated;
 }
 
 export function deleteEdge(caseId: string, edgeId: string) {
-  return transaction((database) => {
+  const removed = transaction((database) => {
     assertMutable(mustCase(caseId, database));
     const result = database.prepare("DELETE FROM edges WHERE id = ? AND case_id = ?").run(edgeId, caseId);
     if (!result.changes) throw new HttpError("Relationship not found.", 404);
     touchCase(database, caseId);
     return { ok: true };
   });
+  emitLive({ caseId, kind: "edge", action: "delete" });
+  return removed;
 }
 
 const ALLOWED_MIME = new Map<string, string>([
@@ -896,6 +952,7 @@ export async function addPhotos(nodeId: string, files: File[]) {
       tx.prepare("UPDATE nodes SET updated_at = ? WHERE id = ?").run(stamp, nodeId);
       touchCase(tx, node.case_id, stamp);
     });
+    emitLive({ caseId: node.case_id, kind: "photo", action: "create" });
   } catch (error) {
     for (const photo of stored) unlinkUpload(photo.filename);
     throw error;
@@ -935,6 +992,7 @@ export function deletePhoto(photoId: string) {
     touchCase(tx, row.case_id);
   });
   unlinkUpload(row.filename);
+  emitLive({ caseId: row.case_id, kind: "photo", action: "delete" });
   return { ok: true };
 }
 

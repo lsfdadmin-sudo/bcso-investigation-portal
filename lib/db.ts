@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import bcrypt from "bcryptjs";
 import { dataDir, uploadDir } from "./paths";
-import { seedPortal } from "./seed";
+import { backfillEvidenceEvents, seedPortal } from "./seed";
 
 const globalForDb = globalThis as unknown as { bcso?: DatabaseSync };
 
@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   pos_x REAL NOT NULL,
   pos_y REAL NOT NULL,
   payload TEXT NOT NULL,
+  event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -129,8 +130,17 @@ function ensurePasswords(database: DatabaseSync) {
   }
 }
 
+function ensureEventColumn(database: DatabaseSync) {
+  const columns = database.prepare("PRAGMA table_info(nodes)").all() as { name: string }[];
+  if (!columns.some((column) => column.name === "event_id")) {
+    database.exec("ALTER TABLE nodes ADD COLUMN event_id TEXT REFERENCES events(id) ON DELETE SET NULL");
+  }
+  database.exec("CREATE INDEX IF NOT EXISTS idx_nodes_event ON nodes(event_id)");
+}
+
 function init(database: DatabaseSync) {
   database.exec(SCHEMA);
+  ensureEventColumn(database);
   database.exec("BEGIN IMMEDIATE");
   try {
     ensurePasswords(database);
@@ -141,6 +151,7 @@ function init(database: DatabaseSync) {
       seedPortal(database);
       database.prepare("INSERT INTO meta (id, seeded) VALUES (1, 1)").run();
     }
+    backfillEvidenceEvents(database);
     database.exec("COMMIT");
   } catch (error) {
     try {

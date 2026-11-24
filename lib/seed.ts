@@ -19,6 +19,7 @@ type NodeSeed = {
   kind: "case" | "suspect" | "evidence" | "related";
   x: number;
   y: number;
+  eventId?: string | null;
   payload: Record<string, unknown>;
   photo?: { id: string; scene: StillScene; caption: string; stamp: string; name: string };
 };
@@ -190,6 +191,7 @@ const CASES: CaseSeed[] = [
       {
         id: "sandy_mask",
         kind: "evidence",
+        eventId: "sandy_ev4",
         x: 820,
         y: 40,
         payload: {
@@ -210,6 +212,7 @@ const CASES: CaseSeed[] = [
       {
         id: "sandy_dvr",
         kind: "evidence",
+        eventId: "sandy_ev5",
         x: 820,
         y: 250,
         payload: {
@@ -230,6 +233,7 @@ const CASES: CaseSeed[] = [
       {
         id: "sandy_gun",
         kind: "evidence",
+        eventId: "sandy_ev6",
         x: 820,
         y: 470,
         payload: {
@@ -250,6 +254,7 @@ const CASES: CaseSeed[] = [
       {
         id: "sandy_truck",
         kind: "evidence",
+        eventId: "sandy_ev5",
         x: 430,
         y: 480,
         payload: {
@@ -427,6 +432,7 @@ const CASES: CaseSeed[] = [
       {
         id: "paleto_bricks",
         kind: "evidence",
+        eventId: "paleto_ev2",
         x: 800,
         y: 40,
         payload: {
@@ -447,6 +453,7 @@ const CASES: CaseSeed[] = [
       {
         id: "paleto_phone",
         kind: "evidence",
+        eventId: "paleto_ev2",
         x: 800,
         y: 260,
         payload: {
@@ -467,6 +474,7 @@ const CASES: CaseSeed[] = [
       {
         id: "paleto_notes",
         kind: "evidence",
+        eventId: "paleto_ev4",
         x: 800,
         y: 480,
         payload: {
@@ -487,6 +495,7 @@ const CASES: CaseSeed[] = [
       {
         id: "paleto_van",
         kind: "evidence",
+        eventId: "paleto_ev3",
         x: 420,
         y: 470,
         payload: {
@@ -644,6 +653,7 @@ const CASES: CaseSeed[] = [
       {
         id: "grape_paint",
         kind: "evidence",
+        eventId: "grape_ev3",
         x: 760,
         y: 60,
         payload: {
@@ -664,6 +674,7 @@ const CASES: CaseSeed[] = [
       {
         id: "grape_still",
         kind: "evidence",
+        eventId: "grape_ev4",
         x: 760,
         y: 300,
         payload: {
@@ -684,6 +695,7 @@ const CASES: CaseSeed[] = [
       {
         id: "grape_bike",
         kind: "evidence",
+        eventId: "grape_ev3",
         x: 760,
         y: 530,
         payload: {
@@ -850,6 +862,7 @@ const CASES: CaseSeed[] = [
       {
         id: "cassidy_gun",
         kind: "evidence",
+        eventId: "cassidy_ev3",
         x: 760,
         y: 60,
         payload: {
@@ -870,6 +883,7 @@ const CASES: CaseSeed[] = [
       {
         id: "cassidy_boot",
         kind: "evidence",
+        eventId: "cassidy_ev3",
         x: 760,
         y: 300,
         payload: {
@@ -890,6 +904,7 @@ const CASES: CaseSeed[] = [
       {
         id: "cassidy_statement",
         kind: "evidence",
+        eventId: "cassidy_ev2",
         x: 760,
         y: 530,
         payload: {
@@ -954,6 +969,19 @@ const CASES: CaseSeed[] = [
   },
 ];
 
+export function backfillEvidenceEvents(database: DatabaseSync) {
+  const update = database.prepare(
+    `UPDATE nodes SET event_id = ?
+     WHERE id = ? AND kind = 'evidence' AND event_id IS NULL
+       AND EXISTS (SELECT 1 FROM events WHERE id = ?)`,
+  );
+  for (const item of CASES) {
+    for (const node of item.nodes) {
+      if (node.kind === "evidence" && node.eventId) update.run(node.eventId, node.id, node.eventId);
+    }
+  }
+}
+
 export function seedPortal(database: DatabaseSync) {
   const insertCase = database.prepare(
     `INSERT INTO cases (
@@ -970,7 +998,7 @@ export function seedPortal(database: DatabaseSync) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertNode = database.prepare(
-    `INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO nodes (id, case_id, kind, pos_x, pos_y, payload, event_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertEdge = database.prepare(
     `INSERT INTO edges (id, case_id, source_id, target_id, source_handle, target_handle, label, created_at)
@@ -1032,6 +1060,7 @@ export function seedPortal(database: DatabaseSync) {
         node.x,
         node.y,
         JSON.stringify(node.payload),
+        node.kind === "evidence" ? node.eventId ?? null : null,
         item.createdAt,
         item.updatedAt,
       );

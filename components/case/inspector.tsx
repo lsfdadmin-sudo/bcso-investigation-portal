@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link2, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
+import { EventSelect } from "@/components/case/event-select";
 import { Lightbox } from "@/components/case/lightbox";
 import { useSession } from "@/components/session";
 import { Badge } from "@/components/ui/badge";
@@ -15,24 +16,26 @@ import { EVIDENCE_CATEGORIES, LINK_LABELS, SUSPECT_STATUSES, evidenceCategoryLab
 import { ApiError, api } from "@/lib/client";
 import { can } from "@/lib/permissions";
 import { nodeTitle } from "@/lib/present";
-import type { EvidencePayload, GraphData, GraphEdge, GraphNode, NodeKind, RelatedPayload, SuspectPayload } from "@/lib/types";
+import type { CaseEvent, EvidencePayload, GraphData, GraphEdge, GraphNode, NodeKind, RelatedPayload, SuspectPayload } from "@/lib/types";
 
 type Props = {
   caseId: string;
   node: GraphNode;
   nodes: GraphNode[];
   edges: GraphEdge[];
+  events: CaseEvent[];
   locked: boolean;
   onClose: () => void;
   onGraph: (graph: GraphData) => void;
   onFocus: (id: string) => void;
+  onRequestDelete: () => void;
 };
 
 async function refresh(caseId: string) {
   return api<GraphData>(`/api/cases/${caseId}/graph`);
 }
 
-export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph, onFocus }: Props) {
+export function Inspector({ caseId, node, nodes, edges, events, locked, onClose, onGraph, onFocus, onRequestDelete }: Props) {
   const { role } = useSession();
   const editable =
     !locked &&
@@ -54,21 +57,33 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
   const [suspect, setSuspect] = useState<SuspectPayload | null>(node.kind === "suspect" ? node.payload : null);
   const [evidence, setEvidence] = useState<EvidencePayload | null>(node.kind === "evidence" ? node.payload : null);
   const [related, setRelated] = useState<RelatedPayload | null>(node.kind === "related" ? node.payload : null);
+  const [eventId, setEventId] = useState<string | null>(node.kind === "evidence" ? node.eventId : null);
   const [saving, setSaving] = useState(false);
   const [linkTarget, setLinkTarget] = useState("");
   const [linkLabel, setLinkLabel] = useState<string>(LINK_LABELS[0]);
   const [customLabel, setCustomLabel] = useState("");
   const [createKind, setCreateKind] = useState<Exclude<NodeKind, "case">>("evidence");
   const [createName, setCreateName] = useState("");
+  const [createEventId, setCreateEventId] = useState<string | null>(null);
+  const dirty = useRef(false);
+  const loadedId = useRef(node.id);
   const [uploading, setUploading] = useState(false);
   const [lightbox, setLightbox] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
+    if (loadedId.current !== node.id) {
+      loadedId.current = node.id;
+      dirty.current = false;
+      setLinkTarget("");
+      setCreateName("");
+      setCreateEventId(null);
+    }
+    if (dirty.current) return;
     setSuspect(node.kind === "suspect" ? node.payload : null);
     setEvidence(node.kind === "evidence" ? node.payload : null);
     setRelated(node.kind === "related" ? node.payload : null);
-    setLinkTarget("");
+    setEventId(node.kind === "evidence" ? node.eventId : null);
   }, [node]);
 
   const links = useMemo(
@@ -84,6 +99,10 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
 
   const others = nodes.filter((item) => item.id !== node.id);
 
+  function markDirty() {
+    dirty.current = true;
+  }
+
   async function save() {
     const payload = node.kind === "suspect" ? suspect : node.kind === "evidence" ? evidence : related;
     if (!payload) return;
@@ -91,8 +110,9 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
     try {
       await api(`/api/cases/${caseId}/nodes/${node.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ payload }),
+        body: JSON.stringify(node.kind === "evidence" ? { payload, eventId } : { payload }),
       });
+      dirty.current = false;
       onGraph(await refresh(caseId));
       toast.success("Node saved.");
     } catch (error) {
@@ -172,26 +192,22 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
     try {
       const graph = await api<GraphData>(`/api/cases/${caseId}/nodes`, {
         method: "POST",
-        body: JSON.stringify({ kind, payload, linkTo: node.id, linkLabel: label || "Associated With" }),
+        body: JSON.stringify({
+          kind,
+          payload,
+          linkTo: node.id,
+          linkLabel: label || "Associated With",
+          eventId: kind === "evidence" ? createEventId : null,
+        }),
       });
       onGraph(graph);
       const created = graph.nodes.find((item) => !nodes.some((existing) => existing.id === item.id));
       if (created) onFocus(created.id);
       setCreateName("");
+      setCreateEventId(null);
       toast.success("Node created and linked.");
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : "The node was not created.");
-    }
-  }
-
-  async function removeNode() {
-    try {
-      await api(`/api/cases/${caseId}/nodes/${node.id}`, { method: "DELETE" });
-      onClose();
-      onGraph(await refresh(caseId));
-      toast.success("Node removed from the chart.");
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "The node was not deleted.");
     }
   }
 
@@ -222,15 +238,15 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
           <div className="space-y-3">
             <div className="space-y-2">
               <Label htmlFor="suspect-name">Name</Label>
-              <Input id="suspect-name" value={suspect.name} disabled={!editable} onChange={(event) => setSuspect({ ...suspect, name: event.target.value })} />
+              <Input id="suspect-name" value={suspect.name} disabled={!editable} onChange={(event) => { markDirty(); setSuspect({ ...suspect, name: event.target.value }); }} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="suspect-alias">Alias</Label>
-              <Input id="suspect-alias" value={suspect.alias} disabled={!editable} onChange={(event) => setSuspect({ ...suspect, alias: event.target.value })} />
+              <Input id="suspect-alias" value={suspect.alias} disabled={!editable} onChange={(event) => { markDirty(); setSuspect({ ...suspect, alias: event.target.value }); }} />
             </div>
             <div className="space-y-2">
               <Label>Status</Label>
-              <Select value={suspect.status} onValueChange={(status) => setSuspect({ ...suspect, status: status as SuspectPayload["status"] })} disabled={!editable}>
+              <Select value={suspect.status} onValueChange={(status) => { markDirty(); setSuspect({ ...suspect, status: status as SuspectPayload["status"] }); }} disabled={!editable}>
                 <SelectTrigger aria-label="Suspect status">
                   <SelectValue />
                 </SelectTrigger>
@@ -245,7 +261,7 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
             </div>
             <div className="space-y-2">
               <Label htmlFor="suspect-notes">Notes</Label>
-              <Textarea id="suspect-notes" value={suspect.notes} disabled={!editable} onChange={(event) => setSuspect({ ...suspect, notes: event.target.value })} />
+              <Textarea id="suspect-notes" value={suspect.notes} disabled={!editable} onChange={(event) => { markDirty(); setSuspect({ ...suspect, notes: event.target.value }); }} />
             </div>
           </div>
         ) : null}
@@ -255,11 +271,11 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="tag">Evidence tag</Label>
-                <Input id="tag" value={evidence.tag} disabled={!editable} className="font-mono" onChange={(event) => setEvidence({ ...evidence, tag: event.target.value })} />
+                <Input id="tag" value={evidence.tag} disabled={!editable} className="font-mono" onChange={(event) => { markDirty(); setEvidence({ ...evidence, tag: event.target.value }); }} />
               </div>
               <div className="space-y-2">
                 <Label>Category</Label>
-                <Select value={evidence.category} disabled={!editable} onValueChange={(category) => setEvidence({ ...evidence, category: category as EvidencePayload["category"] })}>
+                <Select value={evidence.category} disabled={!editable} onValueChange={(category) => { markDirty(); setEvidence({ ...evidence, category: category as EvidencePayload["category"] }); }}>
                   <SelectTrigger aria-label="Evidence category">
                     <SelectValue />
                   </SelectTrigger>
@@ -275,15 +291,28 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
             </div>
             <div className="space-y-2">
               <Label htmlFor="description">Description</Label>
-              <Textarea id="description" value={evidence.description} disabled={!editable} onChange={(event) => setEvidence({ ...evidence, description: event.target.value })} />
+              <Textarea id="description" value={evidence.description} disabled={!editable} onChange={(event) => { markDirty(); setEvidence({ ...evidence, description: event.target.value }); }} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="custody">Chain of custody</Label>
-              <Textarea id="custody" value={evidence.custody} disabled={!editable} onChange={(event) => setEvidence({ ...evidence, custody: event.target.value })} />
+              <Textarea id="custody" value={evidence.custody} disabled={!editable} onChange={(event) => { markDirty(); setEvidence({ ...evidence, custody: event.target.value }); }} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="evidence-notes">Notes</Label>
-              <Textarea id="evidence-notes" value={evidence.notes} disabled={!editable} onChange={(event) => setEvidence({ ...evidence, notes: event.target.value })} />
+              <Textarea id="evidence-notes" value={evidence.notes} disabled={!editable} onChange={(event) => { markDirty(); setEvidence({ ...evidence, notes: event.target.value }); }} />
+            </div>
+            <div className="space-y-2">
+              <Label>Linked event</Label>
+              <EventSelect
+                events={events}
+                value={eventId}
+                disabled={!editable}
+                onChange={(next) => {
+                  markDirty();
+                  setEventId(next);
+                }}
+              />
+              <p className="text-xs text-fog">Evidence stays collapsed under this event until someone opens it on the chart.</p>
             </div>
           </div>
         ) : null}
@@ -292,15 +321,15 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
           <div className="space-y-3">
             <div className="space-y-2">
               <Label htmlFor="related-title">Title</Label>
-              <Input id="related-title" value={related.title} disabled={!editable} onChange={(event) => setRelated({ ...related, title: event.target.value })} />
+              <Input id="related-title" value={related.title} disabled={!editable} onChange={(event) => { markDirty(); setRelated({ ...related, title: event.target.value }); }} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="related-location">Location</Label>
-              <Input id="related-location" value={related.location} disabled={!editable} onChange={(event) => setRelated({ ...related, location: event.target.value })} />
+              <Input id="related-location" value={related.location} disabled={!editable} onChange={(event) => { markDirty(); setRelated({ ...related, location: event.target.value }); }} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="related-notes">Notes</Label>
-              <Textarea id="related-notes" value={related.notes} disabled={!editable} onChange={(event) => setRelated({ ...related, notes: event.target.value })} />
+              <Textarea id="related-notes" value={related.notes} disabled={!editable} onChange={(event) => { markDirty(); setRelated({ ...related, notes: event.target.value }); }} />
             </div>
           </div>
         ) : null}
@@ -443,6 +472,7 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
               onChange={(event) => setCreateName(event.target.value)}
               placeholder={createKind === "evidence" ? "Description (tag is assigned)" : "Name or title"}
             />
+            {createKind === "evidence" ? <EventSelect events={events} value={createEventId} onChange={setCreateEventId} /> : null}
             <Button type="button" variant="secondary" onClick={() => void createLinked()}>
               Create and link
             </Button>
@@ -457,7 +487,7 @@ export function Inspector({ caseId, node, nodes, edges, locked, onClose, onGraph
         ) : null}
 
         {canDelete ? (
-          <Button type="button" variant="destructive" onClick={() => void removeNode()}>
+          <Button type="button" variant="destructive" onClick={onRequestDelete}>
             <Trash2 />
             Delete node
           </Button>

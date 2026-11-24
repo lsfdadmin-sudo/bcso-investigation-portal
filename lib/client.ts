@@ -1,3 +1,24 @@
+let memoryClientId = "";
+
+export function clientId() {
+  if (typeof window === "undefined") return "";
+  if (memoryClientId) return memoryClientId;
+  try {
+    const existing = window.sessionStorage.getItem("bcso-client");
+    if (existing) {
+      memoryClientId = existing;
+      return existing;
+    }
+    const created = crypto.randomUUID();
+    window.sessionStorage.setItem("bcso-client", created);
+    memoryClientId = created;
+    return created;
+  } catch {
+    memoryClientId = crypto.randomUUID();
+    return memoryClientId;
+  }
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -8,6 +29,8 @@ export class ApiError extends Error {
 
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
+  const origin = clientId();
+  if (origin && !headers.has("x-bcso-client")) headers.set("x-bcso-client", origin);
   if (init?.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }

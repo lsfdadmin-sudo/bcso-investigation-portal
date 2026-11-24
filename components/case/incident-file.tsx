@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/components/session";
@@ -20,6 +20,7 @@ import { EVENT_TYPES, INCIDENT_TYPES, RESPONDER_ROLES } from "@/lib/constants";
 import { api, ApiError } from "@/lib/client";
 import { formatWhen, toDatetimeLocal } from "@/lib/format";
 import { can } from "@/lib/permissions";
+import { cn } from "@/lib/utils";
 import type { CaseDetail, CaseEvent, Responder } from "@/lib/types";
 
 function blankResponder(): Responder {
@@ -29,9 +30,19 @@ function blankResponder(): Responder {
 export function IncidentFile({
   record,
   onRecord,
+  activeEventId,
+  expandedEventIds,
+  expandAllEvidence,
+  evidenceCounts,
+  onRevealEvent,
 }: {
   record: CaseDetail;
   onRecord: (record: CaseDetail) => void;
+  activeEventId: string | null;
+  expandedEventIds: string[];
+  expandAllEvidence: boolean;
+  evidenceCounts: Record<string, number>;
+  onRevealEvent: (eventId: string) => void;
 }) {
   const { role, badge } = useSession();
   const locked = record.status === "closed";
@@ -43,6 +54,10 @@ export function IncidentFile({
 
   const [narrative, setNarrative] = useState(record.narrative);
   const [narrativeState, setNarrativeState] = useState<"saved" | "saving" | "unsaved">("saved");
+  const narrativeDirty = useRef(false);
+  const narrativeRef = useRef(narrative);
+  narrativeRef.current = narrative;
+  const rosterCase = useRef(record.id);
   const [responders, setResponders] = useState<Responder[]>(record.responders);
   const [rosterDirty, setRosterDirty] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -62,22 +77,40 @@ export function IncidentFile({
   });
 
   useEffect(() => {
+    if (rosterCase.current !== record.id) {
+      rosterCase.current = record.id;
+      setRosterDirty(false);
+      setResponders(record.responders);
+      return;
+    }
     if (!rosterDirty) setResponders(record.responders);
-  }, [record.responders, rosterDirty]);
+  }, [record.id, record.responders, rosterDirty]);
 
   useEffect(() => {
-    if (!canEdit) return;
-    if (narrative === record.narrative) return;
+    if (narrativeDirty.current && canEdit) return;
+    setNarrative(record.narrative);
+    if (!narrativeDirty.current) setNarrativeState("saved");
+  }, [record.id, record.narrative, canEdit]);
+
+  useEffect(() => {
+    if (!canEdit || !narrativeDirty.current) return;
+    if (narrative === record.narrative) {
+      narrativeDirty.current = false;
+      setNarrativeState("saved");
+      return;
+    }
     setNarrativeState("unsaved");
+    const snapshot = narrative;
     const timer = window.setTimeout(async () => {
       setNarrativeState("saving");
       try {
         const updated = await api<CaseDetail>(`/api/cases/${record.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ narrative }),
+          body: JSON.stringify({ narrative: snapshot }),
         });
+        if (narrativeRef.current === snapshot) narrativeDirty.current = false;
         onRecord(updated);
-        setNarrativeState("saved");
+        setNarrativeState(narrativeRef.current === snapshot ? "saved" : "unsaved");
       } catch (error) {
         setNarrativeState("unsaved");
         toast.error(error instanceof ApiError ? error.message : "The narrative was not saved.");
@@ -199,7 +232,10 @@ export function IncidentFile({
             aria-label="Incident narrative"
             value={narrative}
             readOnly={!canEdit}
-            onChange={(event) => setNarrative(event.target.value)}
+            onChange={(event) => {
+              narrativeDirty.current = true;
+              setNarrative(event.target.value);
+            }}
             className="min-h-48 leading-7"
           />
           {!canEdit ? (
@@ -325,7 +361,7 @@ export function IncidentFile({
         </section>
 
         <section>
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-1 flex items-center justify-between">
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">Chronological events</h2>
             {canAddEvent ? (
               <Button
@@ -342,24 +378,40 @@ export function IncidentFile({
               </Button>
             ) : null}
           </div>
+          <p className="mb-3 text-xs text-fog">Select an event to reveal its evidence on the chart.</p>
           {adding ? <EventForm draft={draft} setDraft={setDraft} onCancel={() => setAdding(false)} onSave={() => void saveEvent()} /> : null}
           <ol className="mt-4 space-y-0 border-l border-gold/30 pl-4">
             {record.events.length === 0 ? <li className="text-sm text-fog">No events logged.</li> : null}
-            {record.events.map((event) => (
+            {record.events.map((event) => {
+              const open = expandAllEvidence || expandedEventIds.includes(event.id);
+              const active = activeEventId === event.id;
+              const count = evidenceCounts[event.id] ?? 0;
+              return (
               <li key={event.id} className="relative pb-5">
-                <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-gold" />
+                <span className={cn("absolute -left-[21px] top-1.5 h-2 w-2 rounded-full", active || open ? "bg-gold-bright" : "bg-gold")} />
                 {editingId === event.id ? (
                   <EventForm draft={draft} setDraft={setDraft} onCancel={() => setEditingId(null)} onSave={() => void saveEvent(event)} />
                 ) : (
-                  <div>
-                    <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <div className="font-mono text-[11px] text-gold-bright">{formatWhen(event.occurredAt)}</div>
-                      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-fog">
-                        {event.eventType} · {event.badge} · {event.unit}
+                  <div className={cn("rounded-md px-2 py-1.5 transition-colors", open && "bg-gold/[0.06]", active && "ring-1 ring-gold/40")}>
+                    <button
+                      type="button"
+                      className="w-full text-left"
+                      aria-pressed={open}
+                      aria-label={`Reveal evidence for ${event.title}`}
+                      onClick={() => onRevealEvent(event.id)}
+                    >
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <div className="font-mono text-[11px] text-gold-bright">{formatWhen(event.occurredAt)}</div>
+                        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-fog">
+                          {event.eventType} · {event.badge} · {event.unit}
+                        </div>
                       </div>
-                    </div>
-                    <h3 className="mt-1 text-sm font-medium">{event.title}</h3>
-                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/85">{event.findings}</p>
+                      <h3 className="mt-1 text-sm font-medium">{event.title}</h3>
+                      {count > 0 ? (
+                        <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-gold">{count} evidence</div>
+                      ) : null}
+                      <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/85">{event.findings}</p>
+                    </button>
                     {canEditEvent || canDeleteEvent ? (
                       <div className="mt-2 flex gap-2">
                         {canEditEvent ? (
@@ -377,7 +429,8 @@ export function IncidentFile({
                   </div>
                 )}
               </li>
-            ))}
+              );
+            })}
           </ol>
         </section>
 
