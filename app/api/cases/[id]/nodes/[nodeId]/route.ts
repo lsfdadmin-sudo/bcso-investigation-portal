@@ -11,11 +11,7 @@ export async function PATCH(request: Request, context: Ctx) {
     if (located.caseRow.id !== id) throw new HttpError("Node not found.", 404);
     const body = (await readJson(request)) as Record<string, unknown>;
     const moving = body.x !== undefined || body.y !== undefined;
-    const linkingEvent = Object.prototype.hasOwnProperty.call(body, "eventId");
-    if (linkingEvent && located.node.kind !== "evidence") {
-      throw new HttpError("Only evidence can be tied to an event.", 400);
-    }
-    const editing = body.payload !== undefined || linkingEvent;
+    const editing = body.payload !== undefined;
     if (moving && !can(session.role, "node:move")) {
       throw new HttpError("Insufficient clearance for this action.", 403);
     }
@@ -34,10 +30,9 @@ export async function PATCH(request: Request, context: Ctx) {
     }
     if (!moving && !editing) throw new HttpError("Nothing to update.", 400);
     return updateNode(nodeId, {
-      payload: body.payload !== undefined ? body.payload : undefined,
+      payload: editing ? body.payload : undefined,
       x: typeof body.x === "number" ? body.x : undefined,
       y: typeof body.y === "number" ? body.y : undefined,
-      eventId: linkingEvent ? (typeof body.eventId === "string" && body.eventId ? body.eventId : null) : undefined,
     });
   });
 }

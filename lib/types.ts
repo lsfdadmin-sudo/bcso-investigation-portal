@@ -81,7 +81,6 @@ export type GraphNode =
       kind: "evidence";
       x: number;
       y: number;
-      eventId: string | null;
       payload: EvidencePayload;
       photos: Photo[];
       updatedAt: string;
@@ -102,6 +101,13 @@ export type GraphEdge = {
   targetId: string;
   sourceHandle: string | null;
   targetHandle: string | null;
+  label: string;
+};
+
+export type EventLink = {
+  id: string;
+  eventId: string;
+  nodeId: string;
   label: string;
 };
 
@@ -152,4 +158,5 @@ export type CaseDetail = CaseSummary & {
 export type GraphData = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  eventLinks: EventLink[];
 };

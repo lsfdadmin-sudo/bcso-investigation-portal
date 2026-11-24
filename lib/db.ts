@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import bcrypt from "bcryptjs";
 import { dataDir, uploadDir } from "./paths";
-import { backfillEvidenceEvents, seedPortal } from "./seed";
+import { backfillEventLinks, seedPortal } from "./seed";
 
 const globalForDb = globalThis as unknown as { bcso?: DatabaseSync };
 
@@ -83,7 +83,6 @@ CREATE TABLE IF NOT EXISTS nodes (
   pos_x REAL NOT NULL,
   pos_y REAL NOT NULL,
   payload TEXT NOT NULL,
-  event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
   findings TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -100,6 +99,16 @@ CREATE TABLE IF NOT EXISTS edges (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS event_links (
+  id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (event_id, node_id)
+);
+
 CREATE TABLE IF NOT EXISTS photos (
   id TEXT PRIMARY KEY,
   node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -112,6 +121,8 @@ CREATE TABLE IF NOT EXISTS photos (
 
 CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_events_case ON events(case_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_event_links_case ON event_links(case_id, event_id);
+CREATE INDEX IF NOT EXISTS idx_event_links_node ON event_links(node_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_case ON nodes(case_id);
 CREATE INDEX IF NOT EXISTS idx_edges_case ON edges(case_id);
 CREATE INDEX IF NOT EXISTS idx_photos_node ON photos(node_id);
@@ -131,14 +142,6 @@ function ensurePasswords(database: DatabaseSync) {
   }
 }
 
-function ensureEventColumn(database: DatabaseSync) {
-  const columns = database.prepare("PRAGMA table_info(nodes)").all() as { name: string }[];
-  if (!columns.some((column) => column.name === "event_id")) {
-    database.exec("ALTER TABLE nodes ADD COLUMN event_id TEXT REFERENCES events(id) ON DELETE SET NULL");
-  }
-  database.exec("CREATE INDEX IF NOT EXISTS idx_nodes_event ON nodes(event_id)");
-}
-
 function ensureFindingsColumn(database: DatabaseSync) {
   const columns = database.prepare("PRAGMA table_info(nodes)").all() as { name: string }[];
   if (!columns.some((column) => column.name === "findings")) {
@@ -148,7 +151,6 @@ function ensureFindingsColumn(database: DatabaseSync) {
 
 function init(database: DatabaseSync) {
   database.exec(SCHEMA);
-  ensureEventColumn(database);
   ensureFindingsColumn(database);
   database.exec("BEGIN IMMEDIATE");
   try {
@@ -160,7 +162,7 @@ function init(database: DatabaseSync) {
       seedPortal(database);
       database.prepare("INSERT INTO meta (id, seeded) VALUES (1, 1)").run();
     }
-    backfillEvidenceEvents(database);
+    backfillEventLinks(database);
     database.exec("COMMIT");
   } catch (error) {
     try {

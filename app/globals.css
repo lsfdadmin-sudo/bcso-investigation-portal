@@ -106,51 +106,23 @@ body {
   }
 }
 
-.react-flow {
-  --xy-background-color: #0b1016;
-  --xy-node-border-radius: 8px;
-  background: #0b1016;
+.board-rise {
+  animation: board-rise 240ms ease-out both;
 }
 
-.react-flow__attribution {
-  background: transparent !important;
-  opacity: 0.4;
-}
-
-.react-flow__controls-button {
-  background: #161d28 !important;
-  border-bottom-color: rgba(255, 255, 255, 0.06) !important;
-  fill: #e7ecf3 !important;
-}
-
-.react-flow__controls-button:hover {
-  background: #1c2533 !important;
-}
-
-.react-flow__minimap {
-  background: #0f141c !important;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-@media (max-width: 1023px) {
-  .react-flow__minimap {
-    display: none;
+@keyframes board-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 
-.react-flow__edge-path {
-  stroke-linecap: round;
-}
-
-.graph-settling .react-flow__node {
-  transition: transform 320ms ease;
-}
-
-.react-flow__handle {
-  width: 8px;
-  height: 8px;
-  background: #d4af37;
-  border: 1px solid #090c10;
+@media (prefers-reduced-motion: reduce) {
+  .board-rise {
+    animation: none;
+  }
 }
